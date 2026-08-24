@@ -104,6 +104,10 @@ def _parse_report(report_bytes: bytes, path: Path) -> dict[str, Any]:
             object_pairs_hook=_strict_json_object,
             parse_constant=_reject_json_constant,
         )
+    except RecursionError as exc:
+        raise ValueError(
+            f"final JSON report exceeds the supported nesting depth: {path}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"last non-empty stdout line is not a JSON report: {path}: {exc}"
@@ -120,7 +124,13 @@ def _split_stdout_log(
 ) -> tuple[bytes, dict[str, Any], bytes, bytes]:
     if not path.is_file():
         raise FileNotFoundError(f"run log does not exist: {path}")
+    size = path.stat().st_size
+    if size > MAX_LOG_BYTES:
+        raise ValueError(
+            f"run log is too large ({size} bytes; limit {MAX_LOG_BYTES}): {path}"
+        )
     data = path.read_bytes()
+    # Recheck after the read in case the file grew between stat() and read_bytes().
     if len(data) > MAX_LOG_BYTES:
         raise ValueError(
             f"run log is too large ({len(data)} bytes; limit {MAX_LOG_BYTES}): {path}"
