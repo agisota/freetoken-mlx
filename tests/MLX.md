@@ -81,18 +81,40 @@ mkdir -p runs/resident runs/offload
   --expert-cache-budget-gb 4 --moe-cache-size 600 --quiet-cache \
   > runs/offload/run-1.stdout 2> runs/offload/run-1.stderr
 
+read_generated_tokens() {
+  .venv/bin/python - "$1" <<'PYTHON'
+import json
+import pathlib
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+report = json.loads(next(line for line in reversed(lines) if line.strip()))
+print(report["generated_tokens"])
+PYTHON
+}
+
+BASELINE_TOKENS=$(read_generated_tokens runs/resident/run-1.stdout)
+CANDIDATE_TOKENS=$(read_generated_tokens runs/offload/run-1.stdout)
+test "$BASELINE_TOKENS" = "$CANDIDATE_TOKENS" || {
+  echo "generated-token mismatch: resident=$BASELINE_TOKENS offload=$CANDIDATE_TOKENS" >&2
+  exit 1
+}
+test "$BASELINE_TOKENS" -gt 0
+EXPECTED_TOKENS=$BASELINE_TOKENS
+
 .venv/bin/ft mlx-compare \
   --baseline runs/resident/run-1.stdout \
   --candidate runs/offload/run-1.stdout \
-  --expected-tokens 32 \
+  --expected-tokens "$EXPECTED_TOKENS" \
+  --no-throughput-gate \
   --require-output-match \
   --max-peak-memory-ratio 1.05 \
   --write-summary runs/resident-vs-offload.json
 ```
 
-`--max-tokens 32` is only an upper bound because mlx-lm stops at EOS. `mlx-compare` rejects any run whose final report does not contain exactly 32 generated tokens.
+`--max-tokens 32` is only an upper bound because mlx-lm stops at EOS. Both runs must report the same positive `generated_tokens`; set `EXPECTED_TOKENS` to that exact value. The comparator then rejects either a shortened/mismatched run instead of silently comparing different decode lengths.
 
-Do not require identical residency for this resident-versus-offload check. Use `--require-same-residency` for ordinary performance A/B tests where both groups are meant to exercise the same runtime path.
+This recipe disables the throughput gate because it checks output correctness across two intentionally different runtime paths. Do not require identical residency here. For ordinary performance A/B tests, keep the throughput gate and use `--require-same-residency` so both groups exercise one identical path.
 
 ## 5. Controlled performance A/B
 
