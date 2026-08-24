@@ -107,12 +107,13 @@ def _run_git(repo_root: Path, *args: str) -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    return result.stdout.strip() or None
+    return result.stdout.strip()
 
 
 def _source_metadata() -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[2]
-    commit = _run_git(repo_root, "rev-parse", "HEAD")
+    commit_output = _run_git(repo_root, "rev-parse", "HEAD")
+    commit = commit_output or None
     dirty_output = _run_git(
         repo_root,
         "status",
@@ -212,9 +213,10 @@ def capture_run(
         if not prefix:
             raise ValueError("command_prefix cannot be empty")
 
-    output_path = Path(output).expanduser().resolve()
-    if output_path.exists():
-        raise FileExistsError(f"capture output already exists: {output_path}")
+    expanded_output = Path(output).expanduser()
+    if os.path.lexists(expanded_output):
+        raise FileExistsError(f"capture output already exists: {expanded_output}")
+    output_path = expanded_output.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(
         prefix=f".{output_path.name}.", dir=output_path.parent
