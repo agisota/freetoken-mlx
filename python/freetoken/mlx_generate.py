@@ -68,6 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
     from freetoken.mlx_backend import build_parser as build_backend_parser
 
     parser = build_backend_parser()
+    # Abbreviated long options make command provenance ambiguous and can bypass
+    # prompt redaction in capture manifests. Require the canonical option names.
+    parser.allow_abbrev = False
     _add_options(parser)
     return parser
 
