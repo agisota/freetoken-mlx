@@ -19,6 +19,7 @@ Current MLX support:
 - LRU and warm-up SLRU expert eviction;
 - optional speculative decoding;
 - bounded MLX working-set, allocator-cache, and system-headroom controls;
+- rotating KV, quantized KV, and explicit prefill chunk controls supported by the pinned `mlx-lm` generation API;
 - machine-readable capture, runtime, and A/B comparison reports.
 
 This is not a complete MLX port of FreeToken. CUDA attention, serving, scheduling, distributed execution, and most upstream model support remain CUDA/Torch code.
@@ -171,7 +172,7 @@ The measured beneficial pair used a full-Q4 target and compatible Q4 draft:
 
 In the recorded 64-token A/B, this reduced mean time from 12.77 s to 11.45 s, with 57.8% of output tokens accepted from the draft. An 8-token request was slower. A BF16-target speculative run also regressed: 54.84 s for 64 tokens, cache shrink, and slower completion than ordinary BF16 decode. Re-benchmark the exact target, draft, prompt length, and memory envelope before enabling speculation.
 
-The runtime rejects draft/tokenizer pairs with different vocabularies or special-token IDs.
+The runtime rejects draft/tokenizer pairs with different vocabularies or special-token IDs. The report counts an accepted draft token only when `generation_tokens` advances, so the final summary response emitted by `mlx-lm` is not counted twice.
 
 ## Runtime controls
 
@@ -185,10 +186,53 @@ The runtime rejects draft/tokenizer pairs with different vocabularies or special
 | `--moe-cache-size` | requested expert entries before byte-budget clamping |
 | `--cache-policy` | `auto`, `lru`, or `slru` |
 | `--profile` | `stable` or measured `performance` preset |
+| `--max-kv-size` | rotating KV length for non-speculative generation; preserves four prefix tokens |
+| `--kv-bits` | quantize ordinary KV cache to 4 or 8 bits after the selected start offset |
+| `--kv-group-size` | KV quantization group size: 32, 64, or 128 |
+| `--quantized-kv-start` | token offset at which KV quantization begins |
+| `--prefill-step-size` | prompt tokens processed per prefill chunk |
 
 `--profile performance` currently forces the safe cache size and graph evaluation every eight MoE layers. It therefore overrides an explicit `--eval-interval`. To isolate evaluation cadence, use `--profile stable`, set `--eval-interval` explicitly, and opt into any other fast paths you need with their individual flags.
 
 The performance preset also enables lazy single-token expert materialization, BF16 top-4 grouped GEMV, shared-expert/cache-miss overlap, and SLRU for quantized experts. These are hardware- and version-sensitive measurements, not universal defaults.
+
+### Long-context and prefill controls
+
+Bound a non-speculative KV cache while keeping the first four tokens:
+
+```bash
+.venv/bin/ft generate \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --prompt '<long prompt>' \
+  --max-tokens 128 \
+  --max-kv-size 4096 \
+  --prefill-step-size 1024
+```
+
+Quantize the ordinary growing KV cache instead:
+
+```bash
+.venv/bin/ft generate \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --prompt '<long prompt>' \
+  --max-tokens 128 \
+  --kv-bits 4 \
+  --kv-group-size 64 \
+  --quantized-kv-start 4096 \
+  --prefill-step-size 1024
+```
+
+Compatibility rules are enforced before model loading:
+
+- `--max-kv-size` is unavailable with `--draft-model` in `mlx-lm 0.31`;
+- `--max-kv-size` cannot be combined with `--kv-bits`, because `mlx-lm 0.31` does not implement quantization for `RotatingKVCache`;
+- the rotating limit must exceed the four retained prefix tokens;
+- KV quantization changes numerical behavior and must be evaluated on the deployment workload;
+- persistent prompt-cache load/save is still not exposed by this CLI.
+
+The final runtime JSON now records the requested KV/prefill controls, a hash and token count for the fully rendered prompt, prompt and decode rates reported by `mlx-lm`, derived prompt/decode durations, finish reason, and `time_to_first_output_seconds`. That first-output timer begins immediately before `stream_generate`; it does not include model download or model loading.
 
 ## Reproducible run bundles
 
@@ -251,12 +295,13 @@ For close results, add `--max-throughput-relative-mad <ratio>` to reject noisy g
 3. On a miss, only one routed expert's `up_proj`, `gate_proj`, and `down_proj` are materialized.
 4. `MLXOffloadMoeCache` shares capacity across layers and records hits, misses, loads, and evictions.
 5. Decode monitors active plus allocator-cache memory. Above 85% of the configured limit, it shrinks the expert cache and clears the MLX allocator cache.
+6. `mlx_generate.py` layers supported generation controls and versioned prompt/decode metrics over the same resident/offload backend without changing routing or Metal expert compute.
 
-The final report includes residency decisions, safety budgets, elapsed time, memory, expert/shard cache counters, fast-path state, speculative acceptance, and optional timing. Cache events go to stderr and can be disabled with `--quiet-cache`.
+The final report includes residency decisions, safety budgets, elapsed time, prompt/decode metrics, KV settings, memory, expert/shard cache counters, fast-path state, speculative acceptance, and optional expert-path timing. Cache events go to stderr and can be disabled with `--quiet-cache`.
 
 ## Tests
 
-Generic CI covers the torch-free MLX control plane on Python 3.10 and 3.13: source compilation, CLI dispatch, LRU/SLRU semantics, run capture, and benchmark comparison.
+Generic CI covers the torch-free MLX control plane on Python 3.10 and 3.13: source compilation, CLI dispatch, generation-option forwarding, LRU/SLRU semantics, run capture, and benchmark comparison.
 
 On Apple Silicon:
 
@@ -265,13 +310,14 @@ On Apple Silicon:
   tests/test_mlx_backend.py \
   tests/test_mlx_cache.py \
   tests/test_mlx_cli.py \
+  tests/test_mlx_generate.py \
   tests/test_mlx_capture.py \
   tests/test_mlx_compare.py \
   tests/test_mlx_quantize_experts.py \
   -q
 ```
 
-Real-checkpoint MLX generation is not yet automated in repository CI. Follow [`tests/MLX.md`](tests/MLX.md) for the smoke, resident/offload correctness, A/B, and memory-pressure procedures.
+Real-checkpoint MLX generation is not yet automated in repository CI. Follow [`tests/MLX.md`](tests/MLX.md) for the smoke, resident/offload correctness, A/B, long-context/KV, and memory-pressure procedures.
 
 ## Known limitations
 
@@ -279,7 +325,8 @@ Real-checkpoint MLX generation is not yet automated in repository CI. Follow [`t
 - local generation only; the upstream OpenAI/Anthropic server path is not wired to MLX;
 - route admission crosses a Metal→CPU synchronization boundary for every MoE layer;
 - cache misses still depend on safetensors and filesystem page locality;
-- prompt-cache, rotating/quantized KV, and explicit prefill controls are not exposed yet;
+- persistent prompt-cache load/save is not exposed yet;
+- rotating KV cannot be combined with speculation or KV quantization under `mlx-lm 0.31`;
 - no Apple-Silicon CI runner or automated real-checkpoint performance gate;
 - no MLX tensor-parallel path;
 - the grouped BF16 GEMV reads an installed private MLX kernel template and is version-sensitive;
@@ -289,7 +336,7 @@ Real-checkpoint MLX generation is not yet automated in repository CI. Follow [`t
 
 1. separate MLX package/release identity from inherited CUDA publication;
 2. add a pinned Apple-Silicon CI and benchmark runner;
-3. expose prompt/KV cache and prefill controls with split TTFT/prefill/decode metrics;
+3. add persistent prompt-cache load/save and real-checkpoint quality/performance validation for the new KV/prefill controls;
 4. record route traces and miss latency, then simulate policies offline;
 5. repack experts contiguously around `(layer, expert)` miss service;
 6. test predictors that improve on the failed previous-token prefetch baseline;
@@ -300,7 +347,8 @@ Real-checkpoint MLX generation is not yet automated in repository CI. Follow [`t
 ## Layout
 
 ```text
-python/freetoken/mlx_backend.py           model loading, routing, offload, generation
+python/freetoken/mlx_backend.py           model loading, routing, offload, generation core
+python/freetoken/mlx_generate.py          KV/prefill controls and prompt/decode metrics
 python/freetoken/mlx_cache.py             Apple-Silicon expert cache
 python/freetoken/mlx_quantize_experts.py  expert-only checkpoint conversion
 python/freetoken/mlx_capture.py           atomic run bundles and provenance metadata
