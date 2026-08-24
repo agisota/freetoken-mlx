@@ -11,23 +11,30 @@ from freetoken.mlx_backend import build_parser, main
 
 
 class MLXCliTest(unittest.TestCase):
-    def test_help_is_torch_free(self):
+    def test_help_is_torch_free_and_lists_extended_generation_controls(self):
         proc = subprocess.run(
             [sys.executable, "-m", "freetoken.cli", "generate", "--help"],
             check=False, capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("--backend {mlx}", proc.stdout)
+        self.assertIn("--max-kv-size", proc.stdout)
+        self.assertIn("--kv-bits {4,8}", proc.stdout)
+        self.assertIn("--prefill-step-size", proc.stdout)
         self.assertNotIn("torch", sys.modules)
+        self.assertNotIn("mlx", sys.modules)
 
-    def test_root_help_lists_expert_quantizer_without_importing_torch(self):
+    def test_root_help_lists_mlx_control_plane_without_importing_accelerators(self):
         proc = subprocess.run(
             [sys.executable, "-m", "freetoken.cli", "--help"],
             check=False, capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("mlx-quantize-experts", proc.stdout)
+        self.assertIn("mlx-capture", proc.stdout)
+        self.assertIn("mlx-compare", proc.stdout)
         self.assertNotIn("torch", sys.modules)
+        self.assertNotIn("mlx", sys.modules)
 
     def test_stable_memory_defaults(self):
         args = build_parser().parse_args(["--backend", "mlx", "--model", "model"])
