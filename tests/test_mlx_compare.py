@@ -53,19 +53,11 @@ class MLXCompareTest(unittest.TestCase):
             ]
             candidate = [
                 load_run(
-                    _write_run(
-                        root / "candidate-1.log",
-                        elapsed=7.6,
-                        peak=8_100_000_000,
-                    ),
+                    _write_run(root / "candidate-1.log", elapsed=7.6, peak=8_100_000_000),
                     label="candidate",
                 ),
                 load_run(
-                    _write_run(
-                        root / "candidate-2.log",
-                        elapsed=7.8,
-                        peak=8_200_000_000,
-                    ),
+                    _write_run(root / "candidate-2.log", elapsed=7.8, peak=8_200_000_000),
                     label="candidate",
                 ),
             ]
@@ -98,7 +90,7 @@ class MLXCompareTest(unittest.TestCase):
 
         self.assertFalse(result["pass"])
         self.assertTrue(
-            any("expected exactly 32" in item for item in result["violations"])
+            any("expected exactly 32" in violation for violation in result["violations"])
         )
 
     def test_output_mismatch_is_reported(self):
@@ -119,7 +111,7 @@ class MLXCompareTest(unittest.TestCase):
 
         self.assertFalse(result["pass"])
         self.assertTrue(
-            any("generated output differs" in item for item in result["violations"])
+            any("generated output differs" in violation for violation in result["violations"])
         )
 
     def test_missing_peak_memory_cannot_bypass_default_gate(self):
@@ -136,6 +128,102 @@ class MLXCompareTest(unittest.TestCase):
         self.assertFalse(result["pass"])
         self.assertTrue(
             any("peak-memory gate requires" in item for item in result["violations"])
+        )
+
+    def test_one_missing_peak_memory_cannot_hide_behind_group_median(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = [
+                load_run(_write_run(root / "a-1.log"), label="baseline"),
+                load_run(
+                    _write_run(root / "a-2.log", peak=None), label="baseline"
+                ),
+            ]
+            candidate = [
+                load_run(_write_run(root / "b.log"), label="candidate")
+            ]
+            result = compare_runs(baseline, candidate, expected_tokens=32)
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(
+            any("in every run" in item for item in result["violations"])
+        )
+
+    def test_zero_token_baseline_fails_without_division_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = [
+                load_run(
+                    _write_run(root / "a.log", tokens=0), label="baseline"
+                )
+            ]
+            candidate = [
+                load_run(_write_run(root / "b.log"), label="candidate")
+            ]
+            result = compare_runs(baseline, candidate, expected_tokens=32)
+
+        self.assertFalse(result["pass"])
+        self.assertIsNone(result["ratios"]["median_wall_throughput"])
+        self.assertTrue(
+            any("positive baseline token rate" in item for item in result["violations"])
+        )
+
+    def test_cache_miss_gate_requires_metric_in_every_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = [
+                load_run(_write_run(root / "a.log"), label="baseline")
+            ]
+            candidate = [
+                load_run(
+                    _write_run(root / "b-1.log"), label="candidate"
+                ),
+                load_run(
+                    _write_run(root / "b-2.log", misses=None), label="candidate"
+                ),
+            ]
+            result = compare_runs(
+                baseline,
+                candidate,
+                expected_tokens=32,
+                max_cache_miss_ratio=1.05,
+            )
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(
+            any("cache-miss gate" in item and "in every run" in item
+                for item in result["violations"])
+        )
+
+    def test_same_residency_gate_rejects_mixed_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = [
+                load_run(
+                    _write_run(root / "a-1.log", residency="offload"),
+                    label="baseline",
+                ),
+                load_run(
+                    _write_run(root / "a-2.log", residency="resident"),
+                    label="baseline",
+                ),
+            ]
+            candidate = [
+                load_run(
+                    _write_run(root / "b.log", residency="offload"),
+                    label="candidate",
+                )
+            ]
+            result = compare_runs(
+                baseline,
+                candidate,
+                expected_tokens=32,
+                require_same_residency=True,
+            )
+
+        self.assertFalse(result["pass"])
+        self.assertTrue(
+            any("one residency path" in item for item in result["violations"])
         )
 
     def test_last_nonempty_line_must_be_json_report(self):
