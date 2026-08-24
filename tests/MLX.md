@@ -116,6 +116,8 @@ EXPECTED_TOKENS=$BASELINE_TOKENS
 
 This recipe disables the throughput gate because it checks output correctness across two intentionally different runtime paths. Do not require identical residency here. For ordinary performance A/B tests, keep the throughput gate and use `--require-same-residency` so both groups exercise one identical path.
 
+Output matching is byte-exact. CRLF, LF, and bare-CR differences produce different output hashes. The summary also records SHA-256 hashes of every full source log and final JSON report, so the evidence can be tied back to the exact captured files.
+
 ## 5. Controlled performance A/B
 
 Run fresh processes in alternating order, for example `A,B,B,A`, and capture stdout and stderr separately. Use at least three valid runs per group for a claim intended to become a default.
@@ -125,6 +127,8 @@ Run fresh processes in alternating order, for example `A,B,B,A`, and capture std
   --baseline runs/A/*.stdout \
   --candidate runs/B/*.stdout \
   --expected-tokens 128 \
+  --min-runs-per-group 3 \
+  --require-balanced-groups \
   --min-throughput-ratio 0.97 \
   --max-peak-memory-ratio 1.05 \
   --max-cache-miss-ratio 1.05 \
@@ -133,13 +137,15 @@ Run fresh processes in alternating order, for example `A,B,B,A`, and capture std
   --write-summary runs/comparison.json
 ```
 
+For close results, add `--max-throughput-relative-mad <ratio>` to reject groups whose median absolute deviation divided by median throughput exceeds the chosen noise budget. Set the threshold from the runner's established baseline rather than copying an arbitrary value across machines.
+
 Exit codes are stable for harnesses:
 
 - `0`: all gates passed;
 - `1`: logs were valid, but one or more gates failed;
 - `2`: invalid arguments or malformed/missing logs.
 
-The comparison JSON includes the raw run records, medians, ratios, thresholds, output hashes, and explicit violations.
+The comparison JSON schema is versioned. It includes raw run records, medians, relative throughput dispersion, ratios, thresholds, byte-exact output hashes, source-log/report hashes, and explicit violations. The parser rejects duplicate JSON keys, non-finite constants, counters outside the signed 64-bit range, and oversized logs/reports.
 
 ## 6. Memory-pressure validation
 
@@ -153,8 +159,9 @@ A valid pressure test must show that:
 
 1. the process either completes or exits through the clean MLX memory error path;
 2. the requested macOS headroom remains available;
-3. cache shrink does not change deterministic output;
-4. the final report and stderr log are retained.
+3. cache shrink does not change deterministic output on completed runs;
+4. completed runs retain the final stdout JSON report and stderr log;
+5. clean memory-error exits retain the non-zero exit status and stderr diagnostic. They are not required to emit a success-shaped final JSON report.
 
 ## Current automation gap
 
