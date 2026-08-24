@@ -36,8 +36,8 @@ def _run_serve(argv: list[str]) -> int:
 
 
 def _run_generate(argv: list[str]) -> int:
-    # Keep this lazy: the MLX command must not import torch/flashlib/CUDA.
-    from freetoken.mlx_backend import main
+    # Keep this lazy: parser/help and control-plane tests stay torch/MLX-free.
+    from freetoken.mlx_generate import main
 
     return main(argv)
 
