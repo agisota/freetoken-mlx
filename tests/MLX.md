@@ -1,6 +1,6 @@
 # Validating the MLX backend
 
-The MLX compute path requires an Apple-Silicon Mac. Generic CI can validate the torch-free CLI, cache policy, capture harness, and benchmark comparator, but it cannot execute Metal kernels or reproduce unified-memory behavior.
+The MLX compute path requires an Apple-Silicon Mac. Generic CI can validate the torch-free CLI, cache policy, generation controls, capture harness, and benchmark comparator, but it cannot execute Metal kernels or reproduce unified-memory behavior.
 
 ## 1. Install the development environment
 
@@ -16,13 +16,14 @@ uv pip install -e '.[mlx,dev]'
   tests/test_mlx_backend.py \
   tests/test_mlx_cache.py \
   tests/test_mlx_cli.py \
+  tests/test_mlx_generate.py \
   tests/test_mlx_capture.py \
   tests/test_mlx_compare.py \
   tests/test_mlx_quantize_experts.py \
   -q
 ```
 
-These tests cover routing math, quantized projections, cache semantics, residency selection, shard lifetime, CLI behavior, conversion, evidence capture, and comparison gates. They do not prove that a real checkpoint completes on Metal.
+These tests cover routing math, quantized projections, cache semantics, residency selection, shard lifetime, CLI behavior, generation-option forwarding, conversion, evidence capture, and comparison gates. They do not prove that a real checkpoint completes on Metal.
 
 ## 3. Capture a real-checkpoint smoke run
 
@@ -48,10 +49,12 @@ mkdir -p runs/smoke
 A successful bundle must have `capture.json.status: "completed"`. The last non-empty line of `stdout.log` must be a JSON object with:
 
 - `backend: "mlx"`;
+- `runtime_report_schema_version: 1`;
 - `generated_tokens: 1`;
 - `residency.selected: "offload"`;
 - a non-null `expert_cache`;
-- positive `memory.peak_bytes`.
+- positive `memory.peak_bytes`;
+- non-null `prompt`, `decode`, and `kv_cache` objects.
 
 The bytes before that JSON line are generated output. Cache events are in `stderr.log`. The capture manifest records exact hashes, host/package/git metadata, and the parsed runtime record. Prompt text is redacted from the manifest by default; only its UTF-8 size and SHA-256 are stored.
 
@@ -148,7 +151,69 @@ Exit codes are stable for harnesses:
 
 The comparison JSON schema is versioned. It includes raw run records, medians, relative throughput dispersion, ratios, thresholds, byte-exact output hashes, source-log/report hashes, and explicit violations. The parser rejects duplicate JSON keys, non-finite constants, counters outside the signed 64-bit range, duplicate inputs, and oversized logs/reports.
 
-## 6. Memory-pressure validation
+## 6. Long-context, KV, and prefill validation
+
+Test rotating KV and quantized KV as separate experiments. `mlx-lm 0.31` cannot quantize a `RotatingKVCache`, so the CLI rejects `--max-kv-size` together with `--kv-bits`. It also rejects rotating KV with speculative decoding.
+
+### Rotating KV
+
+```bash
+.venv/bin/ft mlx-capture \
+  --output runs/rotating/run-1 \
+  --label rotating-kv \
+  --timeout-seconds 1800 \
+  -- \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --prompt '<long prompt>' \
+  --max-tokens 128 \
+  --residency resident \
+  --max-kv-size 4096 \
+  --prefill-step-size 1024 \
+  --quiet-cache
+```
+
+The report must contain:
+
+```json
+{
+  "kv_cache": {
+    "max_size": 4096,
+    "bits": null,
+    "prefill_step_size": 1024
+  }
+}
+```
+
+The rotating limit must exceed the four prefix tokens retained by the upstream cache implementation.
+
+### Quantized KV
+
+```bash
+.venv/bin/ft mlx-capture \
+  --output runs/kv-q4/run-1 \
+  --label kv-q4 \
+  --timeout-seconds 1800 \
+  -- \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --prompt '<long prompt>' \
+  --max-tokens 128 \
+  --residency resident \
+  --kv-bits 4 \
+  --kv-group-size 64 \
+  --quantized-kv-start 4096 \
+  --prefill-step-size 1024 \
+  --quiet-cache
+```
+
+The report must identify the requested bits, group size, start offset, prefill chunk size, rendered-prompt hash, prompt token count/rate, decode token count/rate, finish reason, and first-output latency.
+
+Compare each candidate against an otherwise identical ordinary-KV baseline. Record output/quality separately: KV quantization can change logits, so byte-identical output is not a universal requirement for this numerical experiment. Use exact output matching only when the selected prompt is expected to remain deterministic under the tested precision.
+
+Persistent prompt-cache load/save is not implemented by this CLI yet and should not be inferred from these controls.
+
+## 7. Memory-pressure validation
 
 Unified-memory failures can degrade the whole desktop before Python receives a clean exception. Close unrelated workloads and keep an explicit safety envelope:
 
@@ -170,4 +235,4 @@ A timeout is not equivalent to a clean memory failure. Treat `capture.json.statu
 
 ## Current automation gap
 
-There is still no repository-managed Apple-Silicon runner. Real-checkpoint generation, Metal kernel compatibility, and performance thresholds remain manual until that lane exists. The generic CI workflow intentionally tests only the torch-free control plane.
+There is still no repository-managed Apple-Silicon runner. Real-checkpoint generation, Metal kernel compatibility, long-context quality, and performance thresholds remain manual until that lane exists. The generic CI workflow intentionally tests only the torch-free control plane.
