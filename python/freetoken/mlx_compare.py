@@ -13,13 +13,18 @@ from pathlib import Path
 from typing import Any, Sequence
 
 MAX_LOG_BYTES = 64 << 20
-REPORT_SCHEMA_VERSION = 1
+MAX_REPORT_BYTES = 4 << 20
+MAX_COUNTER_VALUE = (1 << 63) - 1
+REPORT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
 class RunRecord:
     path: str
     label: str
+    log_sha256: str
+    log_bytes: int
+    report_sha256: str
     generated_tokens: int
     elapsed_seconds: float
     wall_tokens_per_second: float
@@ -33,7 +38,10 @@ class RunRecord:
 def _number(value: Any, *, field: str, positive: bool = False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be numeric")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{field} must be finite") from exc
     if not math.isfinite(number):
         raise ValueError(f"{field} must be finite")
     if positive and number <= 0:
@@ -46,52 +54,100 @@ def _number(value: Any, *, field: str, positive: bool = False) -> float:
 def _optional_nonnegative_int(value: Any, *, field: str) -> int | None:
     if value is None:
         return None
-    number = _number(value, field=field)
-    if not number.is_integer():
+    if isinstance(value, bool):
         raise ValueError(f"{field} must be an integer")
-    return int(number)
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{field} must be finite")
+        if not value.is_integer():
+            raise ValueError(f"{field} must be an integer")
+        number = int(value)
+    else:
+        raise ValueError(f"{field} must be an integer")
+    if number < 0:
+        raise ValueError(f"{field} cannot be negative")
+    if number > MAX_COUNTER_VALUE:
+        raise ValueError(
+            f"{field} exceeds the supported 64-bit counter range"
+        )
+    return number
 
 
-def _split_stdout_log(path: Path) -> tuple[str, dict[str, Any]]:
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant is not allowed: {value}")
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key is not allowed: {key}")
+        result[key] = value
+    return result
+
+
+def _parse_report(report_bytes: bytes, path: Path) -> dict[str, Any]:
+    if len(report_bytes) > MAX_REPORT_BYTES:
+        raise ValueError(
+            f"final JSON report is too large ({len(report_bytes)} bytes; "
+            f"limit {MAX_REPORT_BYTES}): {path}"
+        )
+    try:
+        text = report_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"final JSON report is not UTF-8: {path}: {exc}") from exc
+    try:
+        report = json.loads(
+            text,
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"last non-empty stdout line is not a JSON report: {path}: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(f"invalid final JSON report: {path}: {exc}") from exc
+    if not isinstance(report, dict):
+        raise ValueError(f"final JSON report must be an object: {path}")
+    return report
+
+
+def _split_stdout_log(
+    path: Path,
+) -> tuple[bytes, dict[str, Any], bytes, bytes]:
     if not path.is_file():
         raise FileNotFoundError(f"run log does not exist: {path}")
-    size = path.stat().st_size
-    if size > MAX_LOG_BYTES:
+    data = path.read_bytes()
+    if len(data) > MAX_LOG_BYTES:
         raise ValueError(
-            f"run log is too large ({size} bytes; limit {MAX_LOG_BYTES}): {path}"
+            f"run log is too large ({len(data)} bytes; limit {MAX_LOG_BYTES}): {path}"
         )
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
+    lines = data.splitlines(keepends=True)
     report_index = next(
         (index for index in range(len(lines) - 1, -1, -1) if lines[index].strip()),
         None,
     )
     if report_index is None:
         raise ValueError(f"run log is empty: {path}")
-    try:
-        report = json.loads(lines[report_index].strip())
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"last non-empty stdout line is not a JSON report: {path}: {exc}"
-        ) from exc
-    if not isinstance(report, dict):
-        raise ValueError(f"final JSON report must be an object: {path}")
-    if any(line.strip() for line in lines[report_index + 1 :]):
-        raise ValueError(f"unexpected content follows the final JSON report: {path}")
+    report_bytes = lines[report_index].strip()
+    report = _parse_report(report_bytes, path)
 
-    output = "".join(lines[:report_index])
+    output = b"".join(lines[:report_index])
     # `ft generate` prints one separator newline before the final JSON report.
-    # Remove exactly that separator while preserving a newline emitted by the model.
-    if output.endswith("\r\n"):
+    # Remove exactly that separator while preserving model-emitted line endings.
+    if output.endswith(b"\r\n"):
         output = output[:-2]
-    elif output.endswith("\n"):
+    elif output.endswith((b"\n", b"\r")):
         output = output[:-1]
-    return output, report
+    return output, report, data, report_bytes
 
 
 def load_run(path: str | Path, *, label: str) -> RunRecord:
     resolved = Path(path).expanduser().resolve()
-    output, report = _split_stdout_log(resolved)
+    output, report, raw_log, report_bytes = _split_stdout_log(resolved)
     if report.get("backend") != "mlx":
         raise ValueError(f"report backend must be 'mlx': {resolved}")
 
@@ -133,17 +189,19 @@ def load_run(path: str | Path, *, label: str) -> RunRecord:
             )
         residency = selected
 
-    output_bytes = output.encode("utf-8")
     return RunRecord(
         path=str(resolved),
         label=label,
+        log_sha256=hashlib.sha256(raw_log).hexdigest(),
+        log_bytes=len(raw_log),
+        report_sha256=hashlib.sha256(report_bytes).hexdigest(),
         generated_tokens=generated,
         elapsed_seconds=elapsed,
         wall_tokens_per_second=generated / elapsed,
         peak_memory_bytes=peak,
         cache_misses=misses,
-        output_sha256=hashlib.sha256(output_bytes).hexdigest(),
-        output_bytes=len(output_bytes),
+        output_sha256=hashlib.sha256(output).hexdigest(),
+        output_bytes=len(output),
         residency=residency,
     )
 
@@ -151,21 +209,31 @@ def load_run(path: str | Path, *, label: str) -> RunRecord:
 def _median(values: list[float | int | None]) -> float | None:
     if not values or any(value is None for value in values):
         return None
-    return statistics.median(float(value) for value in values)
+    return float(statistics.median(values))
+
+
+def _relative_mad(values: list[float]) -> float | None:
+    if not values:
+        return None
+    median = float(statistics.median(values))
+    if median <= 0:
+        return None
+    mad = float(statistics.median(abs(value - median) for value in values))
+    return mad / median
 
 
 def summarize(records: list[RunRecord]) -> dict[str, Any]:
     if not records:
         raise ValueError("each comparison group needs at least one run")
+    throughput = [record.wall_tokens_per_second for record in records]
     return {
         "count": len(records),
         "generated_tokens": sorted({record.generated_tokens for record in records}),
         "median_elapsed_seconds": _median(
             [record.elapsed_seconds for record in records]
         ),
-        "median_wall_tokens_per_second": _median(
-            [record.wall_tokens_per_second for record in records]
-        ),
+        "median_wall_tokens_per_second": _median(throughput),
+        "throughput_relative_mad": _relative_mad(throughput),
         "median_peak_memory_bytes": _median(
             [record.peak_memory_bytes for record in records]
         ),
@@ -182,6 +250,7 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
             "residency": all(record.residency is not None for record in records),
         },
         "output_sha256": sorted({record.output_sha256 for record in records}),
+        "log_sha256": sorted({record.log_sha256 for record in records}),
         "residency": sorted(
             {record.residency for record in records if record.residency is not None}
         ),
@@ -199,6 +268,9 @@ def compare_runs(
     max_cache_miss_ratio: float | None = None,
     require_output_match: bool = False,
     require_same_residency: bool = False,
+    min_runs_per_group: int = 1,
+    require_balanced_groups: bool = False,
+    max_throughput_relative_mad: float | None = None,
 ) -> dict[str, Any]:
     if (
         isinstance(expected_tokens, bool)
@@ -206,6 +278,12 @@ def compare_runs(
         or expected_tokens < 1
     ):
         raise ValueError("expected_tokens must be an integer of at least 1")
+    if (
+        isinstance(min_runs_per_group, bool)
+        or not isinstance(min_runs_per_group, int)
+        or min_runs_per_group < 1
+    ):
+        raise ValueError("min_runs_per_group must be an integer of at least 1")
     if min_throughput_ratio is not None:
         min_throughput_ratio = _number(
             min_throughput_ratio,
@@ -222,6 +300,11 @@ def compare_runs(
             max_cache_miss_ratio,
             field="max_cache_miss_ratio",
             positive=True,
+        )
+    if max_throughput_relative_mad is not None:
+        max_throughput_relative_mad = _number(
+            max_throughput_relative_mad,
+            field="max_throughput_relative_mad",
         )
 
     paths = [record.path for record in baseline + candidate]
@@ -240,6 +323,22 @@ def compare_runs(
     baseline_summary = summarize(baseline)
     candidate_summary = summarize(candidate)
     violations: list[str] = []
+
+    if len(baseline) < min_runs_per_group:
+        violations.append(
+            f"baseline has {len(baseline)} runs; requires at least "
+            f"{min_runs_per_group}"
+        )
+    if len(candidate) < min_runs_per_group:
+        violations.append(
+            f"candidate has {len(candidate)} runs; requires at least "
+            f"{min_runs_per_group}"
+        )
+    if require_balanced_groups and len(baseline) != len(candidate):
+        violations.append(
+            "balanced groups were requested, but run counts differ: "
+            f"baseline={len(baseline)} candidate={len(candidate)}"
+        )
 
     for record in baseline + candidate:
         if record.generated_tokens != expected_tokens:
@@ -271,6 +370,22 @@ def compare_runs(
                 f"minimum {min_throughput_ratio:.6f}"
             )
 
+    if max_throughput_relative_mad is not None:
+        for label, summary in (
+            ("baseline", baseline_summary),
+            ("candidate", candidate_summary),
+        ):
+            relative_mad = summary["throughput_relative_mad"]
+            if relative_mad is None:
+                violations.append(
+                    f"{label} throughput dispersion requires a positive token rate"
+                )
+            elif relative_mad > max_throughput_relative_mad:
+                violations.append(
+                    f"{label} throughput relative MAD {relative_mad:.6f} exceeds "
+                    f"maximum {max_throughput_relative_mad:.6f}"
+                )
+
     all_records = baseline + candidate
     missing_peak = [
         record.path for record in all_records if record.peak_memory_bytes is None
@@ -290,7 +405,6 @@ def compare_runs(
                 "candidate reports non-zero peak memory while baseline reports zero"
             )
     else:
-        # Both medians are non-null because every run was checked above.
         peak_memory_ratio = candidate_peak / baseline_peak
         if peak_memory_ratio > max_peak_memory_ratio:
             violations.append(
@@ -317,7 +431,6 @@ def compare_runs(
                     "candidate reports cache misses while baseline reports zero"
                 )
         else:
-            # Both medians are non-null because every run was checked above.
             cache_miss_ratio = candidate_misses / baseline_misses
             if cache_miss_ratio > max_cache_miss_ratio:
                 violations.append(
@@ -372,6 +485,9 @@ def compare_runs(
             "max_cache_miss_ratio": max_cache_miss_ratio,
             "require_output_match": require_output_match,
             "require_same_residency": require_same_residency,
+            "min_runs_per_group": min_runs_per_group,
+            "require_balanced_groups": require_balanced_groups,
+            "max_throughput_relative_mad": max_throughput_relative_mad,
         },
         "ratios": {
             "median_wall_throughput": throughput_ratio,
@@ -415,6 +531,18 @@ def build_parser(prog: str = "ft mlx-compare") -> argparse.ArgumentParser:
         "--max-cache-miss-ratio", type=float,
         help="optional upper bound for candidate/baseline median cache misses",
     )
+    parser.add_argument(
+        "--min-runs-per-group", type=int, default=1,
+        help="minimum accepted run count in both groups (default: 1)",
+    )
+    parser.add_argument(
+        "--require-balanced-groups", action="store_true",
+        help="require baseline and candidate to contain the same number of runs",
+    )
+    parser.add_argument(
+        "--max-throughput-relative-mad", type=float,
+        help="optional noise gate for median absolute deviation / median token rate",
+    )
     parser.add_argument("--require-output-match", action="store_true")
     parser.add_argument("--require-same-residency", action="store_true")
     parser.add_argument(
@@ -422,7 +550,8 @@ def build_parser(prog: str = "ft mlx-compare") -> argparse.ArgumentParser:
         help="also write the comparison JSON to this path",
     )
     parser.add_argument(
-        "--compact", action="store_true", help="print compact JSON instead of indented JSON"
+        "--compact", action="store_true",
+        help="print compact JSON instead of indented JSON",
     )
     return parser
 
@@ -456,8 +585,11 @@ def main(
             max_cache_miss_ratio=args.max_cache_miss_ratio,
             require_output_match=args.require_output_match,
             require_same_residency=args.require_same_residency,
+            min_runs_per_group=args.min_runs_per_group,
+            require_balanced_groups=args.require_balanced_groups,
+            max_throughput_relative_mad=args.max_throughput_relative_mad,
         )
-    except (OSError, UnicodeError, ValueError) as exc:
+    except (OSError, UnicodeError, ValueError, OverflowError) as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
         return 2
 
@@ -471,7 +603,7 @@ def main(
         if summary_path is not None:
             summary_path.parent.mkdir(parents=True, exist_ok=True)
             summary_path.write_text(payload, encoding="utf-8")
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, OverflowError) as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
         return 2
 
