@@ -1,45 +1,44 @@
 # MLX performance tuning
 
-This document records what has actually improved FreeToken-MLX on Apple Silicon, what did not, and what should be tested next.
+This document records what improved FreeToken-MLX on Apple Silicon, what failed, and how to test the next change without fooling yourself.
 
-The current reference setup is `Qwen/Qwen1.5-MoE-A2.7B`, batch size 1, Apple M4 with 16 GB unified memory. Treat every number below as configuration-specific.
+Reference setup: `Qwen/Qwen1.5-MoE-A2.7B`, batch size 1, Apple M4 with 16 GB unified memory. Every number is configuration-specific.
 
 ## Bottom line
 
-If the whole model fits safely, use native `mlx-lm`.
+Use native `mlx-lm` when the whole model fits safely.
 
-FreeToken-MLX is useful when full residency does not fit. In that regime the dominant cost is usually expert bytes moving through storage/page cache/unified memory, not Python arithmetic and not one isolated GEMV kernel.
+FreeToken-MLX matters when it does not. In that regime, expert-state movement usually dominates: checkpoint bytes, page locality, cache misses, and the synchronization required before Python can admit an expert. One faster GEMV does not fix those costs.
 
-That changes the optimization order:
+Optimization order:
 
 1. reduce expert bytes;
-2. reduce expert misses;
-3. reduce shard/page-in overhead;
+2. reduce misses;
+3. reduce miss service and page-in amplification;
 4. overlap independent work;
-5. remove Metal→CPU synchronization;
-6. only then optimize individual kernels.
+5. remove or amortize Metal→CPU synchronization;
+6. optimize a kernel only after profiling shows it dominates.
 
 ## Benchmark contract
 
-Do not compare runs unless these are fixed:
+A comparison is invalid unless these are fixed:
 
-- checkpoint and quantization layout;
+- checkpoint revision and quantization layout;
 - prompt and chat-template mode;
-- generated token count;
-- batch size;
-- residency mode;
-- MLX memory limit;
-- system headroom;
-- expert-cache byte budget;
-- expert-cache policy;
-- shard-cache size;
-- performance-profile switches;
-- draft model and draft-token count;
-- MLX / mlx-lm versions.
+- exact generated-token count;
+- batch size and sampling behavior;
+- residency path;
+- MLX memory limit and macOS headroom;
+- expert-cache byte budget, capacity, policy, and shard-cache size;
+- profile and individual fast-path switches;
+- draft model and proposed draft-token count;
+- Python, macOS, MLX, and mlx-lm versions.
 
-Use fresh processes. Alternate A/B order (`A,B,B,A`). Record medians and all raw runs, not the best run. Keep generated output when exactness matters.
+Use fresh processes and alternate order (`A,B,B,A`). Keep every raw run. Report medians or paired summaries, never the best sample.
 
-Recommended controlled envelope for a 16 GB Mac:
+`--max-tokens 32` is not proof of a 32-token run: mlx-lm stops at EOS. The final report must contain `generated_tokens: 32`, or the run must be discarded. `ft mlx-compare --expected-tokens 32` enforces that rule.
+
+Recommended 16 GB safety envelope:
 
 ```bash
 .venv/bin/ft generate \
@@ -54,72 +53,109 @@ Recommended controlled envelope for a 16 GB Mac:
   --system-headroom-gb 3.2 \
   --expert-cache-budget-gb 4 \
   --quiet-cache \
-  --detailed-timing
+  --detailed-timing \
+  > runs/A/run-1.stdout \
+  2> runs/A/run-1.stderr
 ```
 
-Run at least short decode (32 tokens), medium decode (128 tokens), and a prompt-heavy case. Cache policies that help at 128 tokens can be neutral or worse at 32.
+Run at least:
 
-## Metrics to keep
+- exact 32-token decode;
+- exact 128-token decode;
+- a prompt-heavy case;
+- a pressure case near the intended memory ceiling.
 
-Every benchmark should retain:
+A policy that helps at 128 tokens can be neutral or harmful at 32.
 
-- wall-clock generation time;
-- generation tok/s;
-- generated output or output hash;
-- MLX active/cache/peak memory;
-- expert cache hits, misses, loads, evictions, resident entries and capacity;
-- shard opens and hits;
-- selected residency path and all memory budgets;
-- speculative accepted-token count and acceptance fraction;
-- detailed route/ensure/eval timing when enabled;
-- machine, OS, MLX and mlx-lm version;
-- thermal/cooldown metadata when doing close A/B comparisons.
+## Machine-readable gate
 
-`route_sync_ms` is not pure Python overhead. `indices.tolist()` is a Metal→CPU synchronization point, so that timer can include upstream GPU work that had not completed yet.
+```bash
+.venv/bin/ft mlx-compare \
+  --baseline runs/A/*.stdout \
+  --candidate runs/B/*.stdout \
+  --expected-tokens 128 \
+  --min-throughput-ratio 0.97 \
+  --max-peak-memory-ratio 1.05 \
+  --max-cache-miss-ratio 1.05 \
+  --require-output-match \
+  --require-same-residency \
+  --write-summary runs/comparison.json
+```
 
-## What worked
+The comparator:
+
+- parses only the last non-empty stdout line as the runtime JSON;
+- treats preceding stdout bytes as generated output and hashes them;
+- rejects missing or malformed metrics;
+- rejects EOS-shortened runs;
+- compares median wall throughput, peak memory, and optionally cache misses;
+- emits explicit violations and exits `0`/`1`/`2` for pass/gate failure/input failure.
+
+See [`../tests/MLX.md`](../tests/MLX.md) for the full capture and validation procedure.
+
+## Metrics to retain
+
+Every run should preserve:
+
+- wall time and generated tokens;
+- generated text or output hash;
+- MLX active, allocator-cache, and peak memory;
+- expert-cache hits, misses, loads, evictions, resident entries, and capacity;
+- shard-cache opens and hits;
+- residency decision and every memory budget;
+- speculative accepted-token count and fraction;
+- route/ensure/eval timing when enabled;
+- machine, OS, Python, MLX, and mlx-lm versions;
+- checkpoint/config fingerprint;
+- order, cooldown, and thermal notes for close comparisons.
+
+`route_sync_ms` is not a pure Python timer. `indices.tolist()` is a Metal→CPU synchronization point, so it can absorb unfinished upstream Metal work.
+
+## Changes that earned their place
 
 ### Native residency when safe
 
-Offload is a capacity mechanism, not a universal fast path. The selector should continue to choose native `mlx-lm` whenever the whole checkpoint fits inside the process working set, physical headroom, and current memory-pressure budget.
+Offload is a capacity mechanism. The selector should keep native `mlx-lm` for checkpoints that fit the MLX working set, physical headroom, and current pressure budget.
 
 ### Bounded lazy evaluation
 
-Evaluating every MoE layer leaves performance on the table. Letting the graph span the whole model keeps evicted expert arrays alive too long and can OOM.
+Evaluating every MoE layer leaves graph performance unused. Deferring all 24 layers keeps evicted arrays alive through graph references and can OOM.
 
-The current performance preset evaluates every eight MoE layers. In the reference BF16 run this moved decode from roughly 1.43 to 1.88 tok/s while keeping memory bounded.
+The measured compromise is evaluation every eight MoE layers. In the reference BF16 run, the performance preset moved decode from about 1.43 to 1.88 tok/s while keeping memory bounded.
+
+Current implementation caveat: `--profile performance` forces `eval_interval=8` and ignores an explicit `--eval-interval`. For a cadence A/B, use `--profile stable`, set the interval explicitly, and enable any other fast paths independently.
 
 ### Shared-expert overlap
 
-Once router indices are known, the shared expert is independent of CPU-side expert-cache admission. Scheduling it before safetensors lookup produced a small repeatable gain.
+After routing indices are available, the shared expert is independent of CPU-side cache admission. Scheduling it before safetensors materialization produced a small repeatable gain.
 
-Keep this switchable. Scheduler behavior can change across MLX releases.
+Keep the switch. MLX scheduling can change between releases.
 
-### Keep parsed quantized shard mappings
+### Retained quantized shard mappings
 
-Quantized experts have packed weights plus scale/bias metadata. Reopening and reparsing shard mappings on every miss was expensive.
+Quantized experts contain packed weights plus scale and bias metadata. Reopening and reparsing mappings on each miss was expensive.
 
-The useful policy was:
+The useful policy:
 
-- retain up to eight shard mappings for quantized checkpoints;
-- remove each consumed expert array from the retained mapping so cache eviction can release it;
-- keep the BF16 default conservative.
+- retain up to eight mappings for quantized checkpoints;
+- remove each consumed expert array from the mapping so expert-cache eviction can release it;
+- retain only one mapping by default for BF16.
 
-At a fixed 600-expert cache this moved full-Q4 decode from about 3.6 to 5.0 tok/s and mixed BF16-dense/Q4-expert decode from about 3.20 to 4.42 tok/s in the recorded runs. Shard-parse time fell from about 2.4 s to 0.24 s.
+At a fixed 600-expert cache, recorded full-Q4 decode moved from about 3.6 to 5.0 tok/s; mixed BF16-dense/Q4-expert moved from about 3.20 to 4.42 tok/s. Shard parse time fell from about 2.4 s to 0.24 s.
 
-### Quantize routed experts
+### Expert-only quantization
 
-Reducing bytes had the largest effect on the offload path.
+Reducing bytes produced the largest offload gain.
 
 Mixed BF16-dense/Q4-expert reached 4.49 tok/s at 7.93 GB peak in the reference run, versus 1.88 tok/s for BF16 offload at 5.83 GB.
 
-This is the expected direction: fewer bytes per expert means cheaper misses and more experts resident under the same memory budget.
+This is the expected mechanism: cheaper misses and more resident experts under the same byte budget.
 
-### Per-projection expert precision
+### Projection-aware precision
 
-The checkpoint format permits different affine precision for `up_proj`, `gate_proj`, and `down_proj`.
+The current converter exposes one base precision for `up_proj` and `gate_proj`, plus an optional `down_proj` override.
 
-Q3 up/gate + Q4 down reduced routed-expert storage by about 16.7% compared with uniform Q4. Under the same safe byte budget it increased cache capacity from 864 to 1,015 experts.
+Q3 up/gate + Q4 down reduced routed-expert storage by about 16.7% relative to uniform Q4 and increased capacity from 864 to 1,015 experts under the same safe byte budget.
 
 Recorded 128-token A/B:
 
@@ -128,9 +164,9 @@ Recorded 128-token A/B:
 | uniform Q4 | 17.52 s | 3,489 | ~8.02 GB |
 | Q3 up/gate + Q4 down | 15.77 s | 2,822 | ~8.03 GB |
 
-A fixed-864-slot comparison still showed about 3.4% speed improvement and ~0.62 GB lower peak, separating lower packed-weight cost from the benefit of extra cache slots.
+At a fixed 864 slots, the mixed layout remained about 3.4% faster and used about 0.62 GB less peak memory.
 
-Quality proxy on 135 teacher-forced tokens:
+Teacher-forced proxy on 135 tokens:
 
 | Format | NLL |
 | --- | ---: |
@@ -139,11 +175,11 @@ Quality proxy on 135 teacher-forced tokens:
 | Q3 up/gate + Q4 down | 2.725 |
 | uniform Q3 | 2.865 |
 
-This supports mixed precision as an opt-in speed/capacity tradeoff. It is not enough evidence to replace Q4 as the conservative default.
+This supports an opt-in speed/capacity tradeoff. Uniform Q4 remains the conservative default.
 
 ### SLRU after warm-up
 
-Pure LRU is vulnerable to scan-like expert traffic. The current SLRU keeps a small protected segment initially, then grows it after several cache-sized request windows.
+Pure LRU is vulnerable to scan-like traffic. The current SLRU starts with a small protected segment, then expands it after several cache-sized request windows.
 
 At 864 entries:
 
@@ -152,11 +188,11 @@ At 864 entries:
 - throughput improved by about 4%;
 - peak memory was unchanged.
 
-Auto-selection enables SLRU only for quantized experts in the performance profile.
+Auto-selection uses SLRU only for quantized experts in the performance profile.
 
-### Use safe spare memory for BF16 cache
+### Safe spare memory for BF16
 
-The old BF16 performance budget left safe memory unused. Raising the performance-profile fraction from 20% to 50%, while still clamping against all safety budgets, increased the reference cache from 121 to 304 experts.
+The old BF16 performance budget left safe memory unused. Raising its cache fraction from 20% to 50%, while preserving every clamp, increased the reference cache from 121 to 304 experts.
 
 Recorded effect:
 
@@ -165,180 +201,195 @@ Recorded effect:
 - 128-token time: 64.59 s → 62.33 s;
 - peak: 5.86 GB → 9.03 GB under a 10 GB MLX limit.
 
-This is a capacity trade: spend memory only when the requested system headroom still survives.
+This is a deliberate memory-for-loads trade, not free speed.
 
-## What did not work
+### Full-Q4 speculative decoding on a compatible workload
 
-### Faster isolated GEMV did not materially move end-to-end decode
+A compatible Q4 0.5B draft helped the full-Q4 MoE target in the recorded 64-token workload:
 
-One thread-layout change improved isolated BF16 expert GEMV from 1.534 ms to 1.243 ms, roughly 19%.
+- mean time: 12.77 s → 11.45 s;
+- 57.8% of output tokens accepted from the draft;
+- peak memory: 5.71 GB → 6.31 GB.
 
-End-to-end generation moved by about 1%. Some layouts also changed numerical reduction order and therefore generated output.
+An 8-token request was slower. Keep speculation opt-in and measure target calls, acceptance, cache capacity after draft reservation, and total wall time.
 
-This is an Amdahl's-law result: the kernel was not the dominant wall-clock component.
+## Experiments that failed
 
-### Batching packed Q4 matmuls regressed
+### Faster isolated GEMV barely moved end-to-end decode
 
-Stacking routed Q4 weights to call larger native quantized matmuls looked attractive but added packing/copy/shape overhead on the decode path. The total path regressed in the tested configuration.
+A thread-layout change improved isolated BF16 expert GEMV from 1.534 ms to 1.243 ms, about 19%.
 
-Do not revive this without measuring total bytes copied and graph-build cost.
+End-to-end generation moved by about 1%. Some layouts changed reduction order and generated output. The kernel was not the dominant component.
+
+### Packed-Q4 batching regressed
+
+Stacking routed Q4 weights reduced dispatch count but added per-token packing, copying, and shape work. The tested path regressed and used more allocator cache.
+
+A future fused path needs physically contiguous cache slots; dynamic stacking removes the intended benefit.
 
 ### Unlimited lazy graphs OOM
 
-Deferring evaluation across all MoE layers prevents evicted expert arrays from dying because the graph still references them. This defeats the cache's memory model.
+A full-model lazy graph keeps references to evicted experts until logits are evaluated. This defeats bounded residency.
 
-Any attempt to increase `eval_interval` must record peak memory and must include an OOM guard.
+Any larger evaluation interval must retain an OOM guard and record peak memory.
+
+### More retained BF16 mappings did not help
+
+BF16 has less quantization metadata per projection. Retaining additional mappings increased retention without a measured throughput gain. The default remains one.
+
+### Alternative BF16 eviction policies were worse
+
+At 300 slots, SLRU increased 32-token misses from 1,953 to 2,086 and slowed inference by about 4%. Offline simulation also favored global LRU over per-layer LRU and LFU for that trace.
+
+Do not transfer a Q4 policy to BF16 without replaying the actual route geometry.
+
+### Previous-token same-layer prefetch was a negative baseline
+
+Only 26.5% of selected experts overlapped between adjacent tokens in the same layer. Prefetching all four prior experts caused roughly three wasted admissions for every useful one and polluted the bounded BF16 cache.
+
+Do not repeat this as the default predictor. Any new prefetch method must beat this measured baseline in useful-prefetch ratio, wasted bytes, miss latency, and end-to-end time.
+
+### BF16-target speculation regressed
+
+A resident Q4 0.5B draft reduced the target expert-cache budget while short BF16 verification chunks routed many unique experts. The recorded 64-token run took 54.84 s, shrank the cache, and finished slower than ordinary BF16 decode.
+
+Speculation must be evaluated per target representation and output length.
+
+### Q2 experts were fast but damaged output
+
+Q2 reached about 6.18 tok/s on a smoke prompt and visibly degraded the sample. Throughput without a quality evaluation is not a valid improvement.
 
 ## Current bottlenecks
 
 ### 1. Metal→CPU route synchronization
 
-The current cached switch does this per MoE layer:
+Every MoE layer currently crosses this boundary:
 
 ```python
 routed = [int(v) for v in indices.reshape(-1).tolist()]
 ```
 
-That is the admission boundary: MLX must make routing indices visible to Python before the CPU can decide which experts to load.
+Python owns expert-cache admission and file materialization, so the route must become host-visible before the miss can be serviced.
 
-This is now one of the most important architectural bottlenecks because it prevents a fully asynchronous decode pipeline.
+Useful experiments:
 
-Candidate experiments:
+- maintain a device-side resident bitset and synchronize only miss IDs;
+- batch decisions where graph structure permits;
+- prefetch using a predictor trained on route traces, not naive previous-token reuse;
+- move compact admission state into an MLX/Metal primitive;
+- separate route wait from miss materialization in instrumentation.
 
-- batch route decisions for several layers where graph structure permits it;
-- prefetch from previous-token route history before the current route is synchronized;
-- maintain a device-side hot-expert table and synchronize only misses;
-- predict likely experts per layer from a route trace and issue speculative page-ins;
-- move more admission state into an MLX/Metal primitive if the cache policy can be expressed compactly.
+Success means lower wall time with identical output and bounded memory. A lower `route_sync_ms` alone is insufficient.
 
-Success criterion: lower wall time with the same output and no increase in miss-induced memory growth. Do not use `route_sync_ms` alone as proof.
+### 2. Checkpoint-oriented storage
 
-### 2. Random expert storage reads
+A miss resolves `(shard path, tensor key)` for three projections. Cached mappings remove metadata parse cost, but payload access still follows Hugging Face shard locality.
 
-On a miss, the runtime resolves `(shard path, key)` and materializes three projections. Even when shard metadata is cached, payload access still depends on filesystem/page-cache locality.
-
-The next storage experiment should build an expert-oriented layout:
+Next experiment:
 
 ```text
-layer/expert -> contiguous gate + up + down payload
+(layer, expert) -> contiguous gate + up + down payload
 ```
 
-Compare it against the current Hugging Face shard layout with the same quantization and cache trace.
+Compare both layouts on the same route trace and quantization. Record bytes read, faults, p50/p95 miss service, TTFT, 32/128-token throughput, disk size, and conversion cost.
 
-Measure:
+### 3. Prompt and KV controls are not exposed
 
-- bytes read per miss;
-- page faults / filesystem reads;
-- miss service latency;
-- first-token latency;
-- 32/128-token throughput;
-- conversion-time and disk-size overhead.
+The backend calls `mlx_lm.stream_generate` without exposing:
 
-A repacked checkpoint is justified only if end-to-end miss service improves enough to compensate for another artifact format.
-
-### 3. Prompt/KV work is largely delegated to default mlx-lm behavior
-
-The backend currently calls `stream_generate` without exposing the useful cache controls already present in mlx-lm.
-
-High-value additions:
-
-- persistent prompt cache for repeated prefixes;
-- `max_kv_size` / rotating KV for bounded long-context memory;
-- KV quantization (`kv_bits`, group size, quantization start);
+- persistent prompt-cache load/save for repeated prefixes;
+- `max_kv_size` / rotating KV for bounded non-speculative generation;
+- KV quantization bits, group size, and start step;
 - explicit prefill step size;
-- separate prefill and decode metrics.
+- separate TTFT, prefill, and decode metrics.
 
-These matter especially for agent harnesses, where the system prompt and tool schema are often reused across many requests.
+Important compatibility limit: mlx-lm 0.31 drops `max_kv_size` when `draft_model` is used, and its speculative path does not implement rotating KV. Do not document or test that flag as active under speculation until a compatible path exists.
 
-### 4. Compile stable subgraphs
+These controls matter most for agent workloads with repeated system prompts and tool schemas.
 
-MLX `mx.compile()` can fuse graphs and reduce graph overhead, but recompilation can occur when shapes or dtypes change.
+### 4. Stable subgraph compilation
 
-Do **not** compile the dynamic cache-miss/materialization path first.
+`mx.compile()` can reduce graph overhead, but dynamic shapes or dtypes can trigger recompilation.
 
-Test compilation on stable components:
+Do not compile cache miss/materialization first. Test stable pieces:
 
-- router softmax/top-k block;
+- router softmax/top-k;
 - shared expert;
-- dense post-routing reduction;
-- resident path decode step;
-- fixed-shape BF16 expert compute once expert arrays are already resident.
+- weighted reduction;
+- resident decode step;
+- fixed-shape resident expert compute.
 
-Benchmark cold compile separately from steady-state decode. A harness should report compile count and warm-up cost.
+Report cold compile time, compile count, warm throughput, memory, and output.
 
-### 5. Prefetch rather than smarter eviction alone
+### 5. Trace-driven prefetch and policy
 
-Once cache policy is reasonably good, preventing a miss before it blocks decode can be worth more than a few points of hit rate.
+Create a trace keyed by `(token, layer)` and replay it offline. Evaluate:
 
-Build a trace recorder keyed by `(layer, token_index)` and replay route sequences offline. Evaluate predictors such as:
+- decayed expert frequency per layer;
+- transition tables over complete expert sets;
+- a small Markov predictor;
+- pinned hot sets;
+- one- or two-layer look-ahead where computation permits;
+- Belady's offline upper bound.
 
-- previous-token same-layer expert set;
-- exponentially decayed expert frequency per layer;
-- transition table from previous expert set;
-- small Markov predictor;
-- top-N hot experts pinned per layer;
-- sequential prefetch for experts expected within the next 1–2 layers.
+Keep previous-token same-layer reuse only as the measured negative baseline: 26.5% overlap and about three wasted admissions per useful one.
 
-Metrics must include wasted-prefetch bytes, not just hit rate.
+Metrics must include wasted bytes and cache pollution, not only hit rate.
 
-### 6. Multi-Mac scaling is not the first fix
+### 6. Multi-Mac is not the first fix
 
-MLX currently supports distributed collectives including ring and JACCL. That makes tensor/model sharding across Apple Silicon machines possible in principle.
+MLX distributed collectives make multi-Mac sharding possible. They do not remove local route synchronization or page-ins.
 
-It does not automatically solve this backend's current bottleneck. If local decode is dominated by route synchronization and storage page-ins, adding network collectives can make it worse.
+Add network collectives only after a time breakdown shows enough compute or capacity pressure to justify them.
 
-Only evaluate multi-Mac after producing a time breakdown showing enough compute or memory-capacity pressure to justify communication.
-
-## Suggested experiment queue
+## Experiment queue
 
 | Priority | Experiment | Expected upside | Main risk |
 | --- | --- | --- | --- |
-| P0 | expose prompt cache + KV controls | large for repeated/long contexts | quality loss with too-small/quantized KV |
-| P0 | route-trace instrumentation + miss latency | enables correct optimization | instrumentation perturbation |
-| P0 | expert-oriented contiguous storage | large if page-in dominates | new artifact format |
-| P1 | route-based expert prefetch | hides miss latency | wasted bandwidth/memory |
-| P1 | `mx.compile()` stable subgraphs | lower graph overhead | recompilation/cold-start |
-| P1 | adaptive byte-budget controller | better pressure handling | oscillation/thrash |
-| P2 | device-side admission experiment | removes sync boundary | implementation complexity |
+| P0 | Apple-Silicon CI + pinned benchmark lane | continuous validity | runner cost/noise |
+| P0 | runtime report schema + prefill/decode split | trustworthy gates | compatibility work |
+| P0 | prompt cache and supported KV controls | large on repeated/long contexts | cache correctness/quality |
+| P0 | route trace + miss latency distribution | identifies the real target | instrumentation perturbation |
+| P0 | contiguous expert artifact | lower page-in cost | another format |
+| P1 | trace-based prefetch | hide miss latency | wasted I/O and pollution |
+| P1 | `mx.compile()` stable subgraphs | less graph overhead | recompilation/cold start |
+| P1 | adaptive byte-budget controller | better pressure response | oscillation |
+| P2 | device-side admission prototype | remove sync boundary | implementation complexity |
 | P2 | multi-Mac/JACCL sharding | more capacity | communication overhead |
 
-## Reproducibility gate
+Package/release identity is a separate P0 repository requirement and should be resolved before publishing MLX artifacts, independent of this performance queue.
 
-A performance change should not become a default unless the repository contains:
+## Default-change gate
 
-1. the exact benchmark command;
+A performance change should not become default without:
+
+1. exact commands;
 2. machine and software metadata;
-3. raw result JSON for every run;
-4. an A/B summary generated from those files;
-5. correctness comparison;
-6. memory-safety comparison;
-7. a disable switch for risky fast paths;
-8. a regression threshold suitable for CI or a documented reason CI cannot run it.
+3. raw stdout/stderr for every run;
+4. exact generated-token enforcement;
+5. A/B summary generated from the raw logs;
+6. output or quality comparison;
+7. peak-memory and headroom comparison;
+8. a disable switch for risky fast paths;
+9. an automated threshold, or a precise explanation of why the required Mac lane is still manual.
 
-Prefer machine-readable benchmark artifacts over prose claims.
+## Safety
 
-## Safety rules
-
-Performance tuning on unified memory can make the rest of macOS unusable before Python receives a clean OOM.
-
-Keep all of these controls:
+Unified-memory pressure can make macOS unusable before Python receives a clean OOM. Preserve:
 
 - MLX working-set limit;
 - allocator-cache limit;
 - explicit system headroom;
-- current memory-pressure check;
-- draft-model reserve;
-- dense/runtime reserve;
+- live pressure check;
+- dense/runtime and draft reserves;
 - expert-cache byte clamp;
-- runtime cache shrink when pressure rises;
-- clean error reporting for Metal memory failures.
+- monotonic cache shrink under pressure;
+- clean Metal-memory errors.
 
-A benchmark that is 5% faster because it borrows memory from the operating system is not a valid improvement.
+A 5% gain obtained by taking memory from the operating system is a regression.
 
 ## Interpretation
 
-The project has already crossed the point where another clever micro-kernel is the obvious answer.
+The optimization frontier is expert-state movement and scheduling: bytes per expert, miss frequency, file/page locality, and how much miss latency can be hidden before the next token blocks.
 
-The current optimization frontier is the **movement and scheduling of expert state**: how many bytes each expert costs, how often it must be loaded, how those loads map to files/pages, and how much of the miss latency can be hidden before the next token blocks.
-
-That is where the next large end-to-end gains are most likely to come from.
+That is where the next material end-to-end gain is most likely.

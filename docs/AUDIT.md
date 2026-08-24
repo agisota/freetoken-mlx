@@ -2,272 +2,238 @@
 
 Audit date: 2026-08-24.
 
-Scope: repository structure, MLX runtime path, memory/offload behavior, tests, packaging/release surface, observability, documentation, and next performance work.
+Scope: repository structure, MLX runtime, offload and memory behavior, tests, packaging/release, observability, security boundaries, documentation, and performance priorities.
 
 ## Executive assessment
 
-FreeToken-MLX contains a real Apple-Silicon MoE offload implementation, not a mock adapter. Routed expert IDs drive cache admission; misses materialize expert projections from safetensors; MLX performs the expert computation; eviction changes resident state; memory limits and pressure checks affect runtime behavior.
+FreeToken-MLX contains a real Apple-Silicon MoE offload implementation. Routed expert IDs drive cache admission; misses materialize projections from safetensors; MLX executes the expert path; eviction changes resident state; memory limits and pressure checks alter runtime behavior.
 
-The main weakness is product/repository separation. The repository still carries the upstream CUDA engine, Linux installer, CUDA release workflow, package name `freetoken`, and metadata that describe a broader server runtime than the MLX backend actually provides. The code is more credible than the packaging and docs make it look.
+The largest repository risk is separation, not a fake backend. The tree still combines the upstream CUDA engine, Linux installer, CUDA release machinery, PyPI name `freetoken`, and an MLX backend with a much narrower support contract.
 
-The next large MLX speedups are unlikely to come from another isolated GEMV tweak. The critical path is expert-state movement and scheduling: route synchronization, cache misses, shard/page locality, bytes per expert, and reusable prompt/KV state.
+The next material MLX gains are also above an isolated GEMV: route synchronization, cache misses, storage locality, bytes per expert, and reused prompt/KV state.
+
+This PR improves the control plane by adding:
+
+- a pure-stdlib `ft mlx-compare` gate for captured runs;
+- exact generated-token, output, throughput, peak-memory, cache-miss, and residency checks;
+- generic CI for torch-free MLX CLI/cache/comparator behavior on Python 3.10 and 3.13;
+- an Apple-Silicon real-checkpoint validation procedure in `tests/MLX.md`;
+- documentation corrections for quantization, speculation, evaluation cadence, and failed prefetch experiments.
+
+It does not add an Apple-Silicon runner or change the Metal runtime.
 
 ## Findings
 
-### P0 — Release/package identity is ambiguous
+### P0 — Package and release identity remain ambiguous
 
-`pyproject.toml` still publishes the distribution as `freetoken`. Its description says it is a local MoE runtime with OpenAI/Anthropic API compatibility, while the classifiers advertise Linux/CUDA. MLX is only an optional extra.
-
-At the same time `.github/workflows/release.yml` builds Linux manylinux wheels and publishes them to the PyPI project `freetoken`.
+`pyproject.toml` still names the distribution `freetoken`, describes a broader OpenAI/Anthropic-compatible runtime, and advertises Linux/CUDA. MLX is an optional extra. The tagged release workflow builds manylinux wheels and targets the same PyPI project.
 
 Risk:
 
-- accidental publication of fork builds under an upstream-compatible package identity;
-- users installing the package for MLX and receiving metadata centered on CUDA/server behavior;
-- inability to reason cleanly about which release contains the Apple-Silicon backend.
+- fork artifacts can be published under an upstream-compatible identity;
+- an MLX user receives metadata and installation paths centered on CUDA/server behavior;
+- release provenance for the Apple-Silicon backend is unclear.
 
-Recommended fix:
+Required decision:
 
-- create a distinct MLX distribution identity or explicitly declare that this repository is the canonical publisher of `freetoken`;
-- create a macOS/arm64 MLX release lane independent of CUDA wheels;
-- make package metadata platform-conditional or split runtime distributions;
-- protect release workflows with environments and explicit package-name assertions.
+- create a distinct MLX distribution, or explicitly document ownership of the `freetoken` package identity;
+- separate macOS/arm64 and CUDA publication lanes;
+- assert package names and platforms before upload;
+- keep credentials behind separate protected environments.
 
-### P0 — No CI lane validates the real MLX runtime on Apple Silicon
+This release-safety work must precede multi-Mac experiments or public MLX artifact publication.
 
-The repository has MLX unit tests, but the visible workflows are wheel/release oriented and CUDA/Linux centered.
+### P0 — No Apple-Silicon CI executes the real backend
 
-Required CI layers:
+The new generic CI compiles sources and tests the torch-free control plane. It intentionally cannot validate Metal execution, unified-memory pressure, private MLX kernel-template compatibility, or real-checkpoint output.
 
-1. torch-free import/CLI tests on macOS arm64;
-2. MLX unit tests on every supported MLX/mlx-lm pair;
-3. a small real-checkpoint smoke test;
-4. a benchmark job on a pinned Apple-Silicon runner that uploads raw JSON;
-5. threshold checks for output equivalence, peak memory, cache behavior, and throughput regression.
+A complete Mac lane needs:
 
-Without an Apple-Silicon runner, performance claims remain manually reproducible rather than continuously validated.
+1. torch-free CLI/import tests on macOS arm64;
+2. MLX unit tests for every supported MLX/mlx-lm pair;
+3. a pinned small real-checkpoint smoke test;
+4. resident/offload output comparison;
+5. raw benchmark artifacts and regression thresholds;
+6. pressure/OOM behavior under a fixed safety envelope.
+
+Until then, `tests/MLX.md` is a manual procedure, not continuous proof.
 
 ### P0 — Per-layer Metal→CPU route synchronization is architectural
 
-The offload switch converts routing indices with `indices.reshape(-1).tolist()` before cache admission. This forces routing state to cross from the MLX graph to Python for every MoE layer.
+The offload switch calls `indices.reshape(-1).tolist()` before Python can admit or materialize experts. This makes the route host-visible at every MoE layer.
 
-It is necessary in the current design because Python owns the cache and file materialization. It also blocks a fully asynchronous decode pipeline.
+The important cost is the synchronization boundary, not Python list construction.
 
-Recommended experiments:
+Experiments:
 
-- trace previous-token routes and prefetch likely next experts before synchronization;
-- maintain per-layer hot sets and synchronize only when the route is outside the resident set;
-- batch admission decisions where model structure allows it;
-- prototype device-side resident-bitset lookup and return only miss IDs;
-- record miss-service latency separately from upstream GPU wait time.
+- device-side resident bitset and host transfer only for misses;
+- trace-trained prefetch that improves on the failed previous-token baseline;
+- batched admission decisions where graph structure permits;
+- compact admission in an MLX/Metal primitive;
+- separate route wait, file access, materialization, and evaluation timing.
 
-Do not optimize `tolist()` as a Python operation; the important cost is the synchronization boundary.
+### P0 — Expert storage is optimized for checkpoints, not misses
 
-### P0 — Expert storage is checkpoint-oriented, not miss-oriented
+The loader retains `(safetensors path, tensor key)` references. This avoids stacked resident experts, but a miss still follows Hugging Face shard layout.
 
-The backend keeps `(safetensors path, key)` references. This avoids resident expert stacks, but cache misses still follow the Hugging Face shard layout.
+Build and compare an expert-oriented artifact with contiguous gate/up/down payloads per `(layer, expert)`. Use the same route trace and quantization, and record bytes, page faults, p50/p95 miss latency, TTFT, throughput, disk size, and conversion cost.
 
-The best next storage experiment is an expert-oriented artifact where gate/up/down payloads for one `(layer, expert)` are contiguous. This can reduce page-in amplification and random payload access.
+### P0 — Prompt and KV controls are missing
 
-The benchmark must compare the same route trace and quantization under both layouts and record bytes/page faults/miss latency, not only tok/s.
-
-### P0 — Prompt/KV cache controls are missing from the FreeToken CLI
-
-Current generation delegates to `mlx_lm.stream_generate` without exposing prompt-cache, rotating KV, KV quantization, or prefill-step controls available in mlx-lm.
-
-This is especially important for agent workloads with a large repeated system/tool prefix.
+Generation delegates to `mlx_lm.stream_generate` without exposing prompt-cache, supported rotating KV, KV quantization, or prefill-step controls.
 
 Add:
 
 - persistent prompt-cache load/save;
-- maximum KV size;
-- KV bits/group size/quantization start;
+- `max_kv_size` for non-speculative generation;
+- KV bits/group size/start step;
 - prefill step size;
-- separate prefill and decode timing/tok/s.
+- TTFT, prefill tok/s, and decode tok/s.
 
-### P1 — Memory prediction is useful but still heuristic
+Compatibility must be explicit: mlx-lm 0.31 ignores `max_kv_size` under speculative decoding.
 
-Resident peak is estimated from checkpoint bytes plus fixed packing/runtime allowances. Offload reserves dense checkpoint bytes plus fixed overhead and then allocates a fraction to expert cache.
+### P1 — Runtime reporting is useful but not yet a stable schema
 
-This is reasonable for a first selector but it should learn from observed runs.
+The runtime JSON already contains memory, residency, cache, timing, and speculative fields. The new comparator gives comparison artifacts `schema_version: 1`, but the source runtime report itself is still unversioned.
 
-Recommended improvement:
+Add to the runtime report:
 
-- persist observed `(checkpoint layout, OS, MLX version, hardware) -> resident peak` records;
-- use measured peak as the first predictor on subsequent runs;
-- report prediction error;
-- clamp automatic cache growth based on live pressure trend rather than a single 85% threshold;
-- add hysteresis before shrinking/growing to prevent oscillation.
+- schema version and git commit;
+- Python/macOS/MLX/mlx-lm versions;
+- hardware identifier and memory;
+- model revision and config/checkpoint fingerprint;
+- prompt hash;
+- TTFT/prefill/decode split;
+- miss latency quantiles;
+- grouped-kernel template hash and fallback reason.
 
-### P1 — Custom Metal GEMV depends on MLX private installed headers
+### P1 — Memory prediction remains heuristic
 
-`_make_grouped_gemv` reads `include/mlx/backend/metal/kernels/gemv.h`, rewrites fragments, and compiles a runtime Metal kernel.
+Resident peak is estimated from checkpoint bytes plus fixed overhead. Offload reserves dense bytes and fixed runtime/draft allowances, then assigns a cache fraction.
 
-This is effective but version-sensitive. A semver-compatible MLX update can change internal headers without treating this code as public API.
+Improve it by persisting observed peaks keyed by hardware, OS, MLX version, and checkpoint layout; report prediction error; use pressure trend plus hysteresis rather than a single shrink threshold.
 
-Recommended fix:
+### P1 — Custom Metal GEMV depends on private MLX headers
 
-- feature-probe the expected header signatures;
-- emit the exact MLX version and kernel-source hash in benchmark output;
-- fall back cleanly to native matmul when the template is incompatible;
-- add a test that intentionally exercises the fallback;
-- consider vendoring the minimal kernel implementation only if license/provenance and maintenance are acceptable.
+`_make_grouped_gemv` reads and rewrites `include/mlx/backend/metal/kernels/gemv.h` from the installed MLX package.
 
-### P1 — `mx.compile()` is not evaluated on stable subgraphs
+Required hardening:
 
-MLX compilation can fuse work and reduce graph overhead, but compiling dynamic cache/materialization functions can cause recompilation and erase the gain.
+- probe expected signatures;
+- record MLX version and source hash;
+- fall back to native matmul on incompatibility;
+- test the fallback;
+- vendor only after license/provenance and maintenance review.
 
-Test it only on stable-shape pieces first:
+### P1 — `mx.compile()` has not been evaluated on stable subgraphs
 
-- routing softmax/top-k;
-- shared expert;
-- score-weighted reduction;
-- resident decode step;
-- fixed-shape expert compute after weights are resident.
+Do not compile cache miss and materialization first. Test stable routing, shared-expert, weighted reduction, resident decode, and fixed-shape resident expert compute. Separate cold compile from warm throughput and record compile count.
 
-Record cold compile time, steady-state speed, memory, and compile count.
+### P1 — Cache work should become trace-driven
 
-### P1 — Cache policy should become trace-driven
+LRU and warm-up SLRU are understandable but not model-aware. Add route tracing and an offline simulator for:
 
-LRU and the current warm-up SLRU are simple and understandable. They are not model-aware.
+- current LRU and SLRU;
+- decayed frequency and pinned hot sets;
+- transition/Markov prefetch;
+- Belady's offline upper bound.
 
-Add a route-trace mode and offline simulator so policies can be compared without running the model repeatedly. Include:
+Report loads, loaded bytes, wasted-prefetch bytes, pollution, and required resident capacity.
 
-- LRU;
-- current SLRU;
-- per-layer LFU/decayed frequency;
-- pinned hot set;
-- Markov/transition prefetch;
-- Belady offline upper bound.
+Do not use naive previous-token same-layer prefetch as a recommendation: measured overlap was 26.5%, with roughly three wasted admissions per useful one.
 
-The simulator should report hit rate, loads, bytes loaded, wasted prefetch, and required resident bytes.
+### P1 — Test coverage is behavior-heavy and integration-light
 
-### P1 — Observability needs schema/versioning
+Existing tests cover cache semantics, quantized math, residency decisions, CLI handling, shard lifetime, conversion, and tokenizer compatibility. This PR adds comparison-gate tests and a manual real-checkpoint procedure.
 
-The final JSON report is already useful, but it should become a stable benchmark artifact.
+Still missing from automated Mac CI:
 
-Add:
-
-- `report_schema_version`;
-- git commit;
-- Python, macOS, MLX, mlx-lm versions;
-- hardware identifier and memory size;
-- checkpoint fingerprint/config hash;
-- prompt hash rather than prompt text by default;
-- prefill/decode split;
-- cache miss latency histogram or quantiles;
-- kernel-source/version identifiers;
-- optional route trace stored separately.
-
-### P1 — Test coverage is behavior-heavy but integration-light
-
-The MLX tests verify cache semantics, quantization math, memory decisions, CLI behavior, and some expert computation. That is a good base.
-
-Missing high-value tests:
-
-- full real model generation compared with native mlx-lm for a resident-safe checkpoint;
-- offload generation compared with a resident reference on the same weights;
+- native resident versus offload output on the same checkpoint;
 - deterministic output across cache sizes/policies for exact paths;
-- OOM/pressure recovery under a deliberately tight memory envelope;
-- custom-kernel fallback;
-- speculative decode acceptance/correctness;
-- mixed-projection checkpoint corruption cases;
-- repeated-prefix prompt-cache correctness once added.
+- pressure recovery under a tight envelope;
+- private-kernel fallback;
+- speculative correctness and acceptance;
+- corrupted mixed-projection checkpoints;
+- repeated-prefix prompt-cache correctness after implementation.
 
 ### P1 — Root installer is unrelated to MLX
 
-`install.sh` is a Linux/NVIDIA wheel installer. Keeping it at repository root makes `freetoken-mlx` look installable through the wrong path.
+`install.sh` is a Linux/NVIDIA wheel installer. At repository root it implies the wrong Apple-Silicon path.
 
-Recommended fix:
+Rename or move it to a CUDA-specific location. Add a macOS installer only when standalone installation is genuinely supported; until then, keep the editable MLX install in README authoritative.
 
-- rename it to `install-linux-cuda.sh` or move it under `scripts/`;
-- add `install-macos.sh` only if a standalone installer is actually supported;
-- keep README instructions authoritative until that exists.
+### P2 — Repository boundaries remain mixed
 
-### P2 — Multi-Mac distributed MLX is possible but premature
-
-Current MLX supports distributed collectives, including ring communication and JACCL. Multi-Mac sharding can increase available memory and compute.
-
-Do not prioritize it until a profiler shows that local storage/synchronization is no longer dominant. Otherwise network collectives will stack on top of the existing stalls.
-
-### P2 — Repository should separate inherited upstream surfaces
-
-The root tree mixes:
-
-- CUDA engine/server/distributed runtime;
-- Apple-Silicon MLX backend;
-- CUDA wheel cache;
-- paper and benchmark artifacts;
-- desktop/Linux release machinery.
-
-A clearer shape would be:
+A clearer shape:
 
 ```text
 python/freetoken/          shared/upstream core
-python/freetoken/mlx/      Apple-Silicon backend and cache
-scripts/mlx/               conversion/benchmark/install helpers
-scripts/cuda/              inherited CUDA packaging helpers
-tests/mlx/                 all MLX tests
+python/freetoken/mlx/      MLX backend, cache, conversion, comparison
+scripts/mlx/               MLX benchmark/install helpers
+scripts/cuda/              inherited CUDA packaging
+tests/mlx/                 MLX tests and fixtures
 benchmarks/mlx/            raw and summarized MLX runs
-docs/mlx/                  MLX architecture/performance docs
+docs/mlx/                  MLX architecture and performance
 ```
 
-This is not required for performance, but it makes maintenance and audit boundaries explicit.
+This is not a performance prerequisite, but it clarifies ownership and audit scope.
+
+### P2 — Multi-Mac is possible but premature
+
+MLX distributed collectives and JACCL make sharding possible. They do not remove local route sync or page-ins. Network collectives should be added only after a profile proves that compute or capacity, rather than local I/O/synchronization, justifies them.
 
 ## Security review
 
-No critical remote-code execution path was identified in the MLX-specific code reviewed here. The MLX CLI is local-only and the backend does not expose the upstream server surface.
+No critical MLX-specific remote-code execution path was identified in the reviewed local generation path.
 
-Important trust boundaries remain:
+Trust boundaries:
 
-- Hugging Face model snapshots and tokenizer/config files are untrusted input;
-- `snapshot_download` can download auxiliary files matching the allowlist;
-- safetensors headers are parsed before loading payloads and should continue to receive strict bounds/shape validation;
-- the custom Metal kernel consumes source from the locally installed MLX package;
-- root Linux installer bootstraps `uv` through `curl | sh`, which is unrelated to MLX and should not be presented as the Apple-Silicon install path;
-- release workflows use a self-hosted build runner and should remain inaccessible to fork PR code.
+- Hugging Face snapshots, tokenizer/config files, and safetensors metadata are untrusted input;
+- auxiliary files are accepted through a download allowlist;
+- the grouped kernel consumes source from the installed MLX package;
+- the inherited Linux installer bootstraps `uv` through `curl | sh` and is not an MLX install path;
+- a self-hosted CUDA build runner must remain unreachable from fork PR code;
+- publication credentials must remain separated and reviewer-gated.
 
-Recommended hardening:
+Hardening:
 
-- support optional model revision/commit pinning and report the resolved revision;
-- add checkpoint/config fingerprints to reports;
-- keep `trust_remote_code` off unless a future model explicitly requires it;
-- validate safetensors dimensions/counts before allocating derived structures;
-- cap total shard count/header size processed by local tools where practical;
-- pin GitHub Actions by commit SHA (already done in the reviewed release workflow) and keep publication behind protected environments;
-- separate MLX and CUDA release credentials/lane.
+- support and report an exact model revision;
+- fingerprint config and checkpoint metadata;
+- keep remote tokenizer/model code disabled by default;
+- validate shard count, header size, dimensions, and tensor count before derived allocation;
+- keep GitHub Actions pinned by commit;
+- separate MLX and CUDA release credentials and package assertions.
 
 ## Validation status
 
-Validated from repository source:
+Validated from source and pure-Python execution:
 
-- real MLX cache admission and eviction path;
-- route-driven expert materialization;
-- quantized and BF16 expert compute paths;
-- memory-budget and pressure checks;
-- LRU/SLRU unit tests;
-- mixed quantization metadata validation;
-- speculative tokenizer compatibility checks;
-- JSON runtime reporting;
-- Linux/CUDA release and installer mismatch with the repository's MLX name.
+- route-driven cache admission and materialization design;
+- BF16 and quantized expert compute paths;
+- memory-budget and pressure decisions;
+- LRU/SLRU semantics;
+- quantization metadata and storage accounting;
+- tokenizer compatibility checks;
+- runtime report parsing;
+- exact-token/output/memory/cache/residency comparison gates;
+- CLI dispatch without importing CUDA;
+- Linux/CUDA package and installer mismatch with the repository's MLX name.
 
-Not executed in this audit environment:
+Not executed in this environment:
 
-- real Apple-Silicon model generation;
-- Metal kernel benchmarks;
-- memory-pressure/OOM experiments;
+- real Apple-Silicon generation;
+- Metal kernel compatibility/performance;
+- unified-memory pressure/OOM behavior;
 - real-checkpoint quality comparisons.
-
-Those require an Apple-Silicon runner with model weights. The repository should automate them rather than relying on prose evidence.
 
 ## Recommended implementation order
 
-1. add an Apple-Silicon CI/benchmark lane and report schema;
-2. expose prompt/KV cache controls and prefill/decode metrics;
-3. add route traces + offline cache simulator;
-4. prototype expert-oriented contiguous storage;
-5. implement route-based prefetch;
-6. evaluate `mx.compile()` on stable subgraphs;
-7. prototype device-side resident/miss lookup;
-8. only then evaluate multi-Mac/JACCL scaling;
-9. split MLX packaging/release identity from inherited CUDA release machinery.
+1. add a pinned Apple-Silicon CI/benchmark lane and version the runtime report;
+2. split MLX package/release identity from inherited CUDA publication;
+3. expose prompt/KV/prefill controls and split TTFT/prefill/decode metrics;
+4. add route traces, miss latency, and an offline cache simulator;
+5. prototype contiguous expert storage;
+6. implement trace-based prefetch that beats the 26.5% overlap baseline;
+7. evaluate `mx.compile()` on stable subgraphs;
+8. prototype device-side resident/miss lookup;
+9. only then evaluate multi-Mac/JACCL scaling.
