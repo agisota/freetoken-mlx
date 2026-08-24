@@ -12,6 +12,7 @@ def _print_help(file: TextIO) -> None:
 Commands:
   generate               Generate locally (minimal MLX backend on Apple Silicon)
   mlx-quantize-experts   Quantize routed MLX experts; keep dense weights intact
+  mlx-capture            Capture one MLX run as a reproducible artifact bundle
   mlx-compare            Compare captured MLX runs and enforce benchmark gates
   serve                  Start the FreeToken API server
   shell                  Chat with a FreeToken server in the terminal
@@ -45,6 +46,13 @@ def _run_mlx_quantize_experts(argv: list[str]) -> int:
     from freetoken.mlx_quantize_experts import main
 
     return main(argv, prog="ft mlx-quantize-experts")
+
+
+def _run_mlx_capture(argv: list[str]) -> int:
+    # Pure stdlib: orchestration and evidence capture do not import MLX/CUDA.
+    from freetoken.mlx_capture import main
+
+    return main(argv, prog="ft mlx-capture")
 
 
 def _run_mlx_compare(argv: list[str]) -> int:
@@ -116,6 +124,7 @@ def _run_bench(argv: list[str]) -> int:
 COMMANDS = {
     "generate": "_run_generate",
     "mlx-quantize-experts": "_run_mlx_quantize_experts",
+    "mlx-capture": "_run_mlx_capture",
     "mlx-compare": "_run_mlx_compare",
     "serve": "_run_serve",
     "shell": "_run_shell",
