@@ -39,3 +39,4 @@ jobs:
           tests/test_mlx_cache.py
           tests/test_mlx_cli.py
           tests/test_mlx_compare.py
+          tests/test_mlx_capture.py
