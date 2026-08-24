@@ -148,6 +148,8 @@ class MLXCompareTest(unittest.TestCase):
         self.assertTrue(
             any("in every run" in item for item in result["violations"])
         )
+        self.assertIsNone(result["baseline"]["median_peak_memory_bytes"])
+        self.assertFalse(result["baseline"]["complete_metrics"]["peak_memory"])
 
     def test_zero_token_baseline_fails_without_division_error(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -226,6 +228,26 @@ class MLXCompareTest(unittest.TestCase):
             any("one residency path" in item for item in result["violations"])
         )
 
+    def test_duplicate_run_paths_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_run(Path(directory) / "run.log")
+            run = load_run(path, label="baseline")
+            with self.assertRaisesRegex(ValueError, "selected only once"):
+                compare_runs([run], [run], expected_tokens=32)
+
+    def test_unknown_selected_residency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_run(Path(directory) / "run.log")
+            lines = path.read_text(encoding="utf-8").splitlines()
+            report = json.loads(lines[-1])
+            report["residency"]["selected"] = "auto"
+            path.write_text(
+                lines[0] + "\n" + json.dumps(report) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "resident.*offload"):
+                load_run(path, label="baseline")
+
     def test_last_nonempty_line_must_be_json_report(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "broken.log"
@@ -234,12 +256,76 @@ class MLXCompareTest(unittest.TestCase):
                 load_run(path, label="baseline")
 
     def test_root_cli_exposes_comparator_without_importing_accelerators(self):
+        modules_before = set(sys.modules)
         stdout = StringIO()
         with redirect_stdout(stdout):
             self.assertEqual(cli_main(["--help"]), 0)
+        loaded = set(sys.modules) - modules_before
         self.assertIn("mlx-compare", stdout.getvalue())
-        self.assertNotIn("torch", sys.modules)
-        self.assertNotIn("mlx", sys.modules)
+        self.assertFalse(
+            any(name == "torch" or name.startswith("torch.") for name in loaded)
+        )
+        self.assertFalse(
+            any(name == "mlx" or name.startswith("mlx.") for name in loaded)
+        )
+
+    def test_nonfinite_thresholds_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = [load_run(_write_run(root / "a.log"), label="baseline")]
+            candidate = [load_run(_write_run(root / "b.log"), label="candidate")]
+            for kwargs in (
+                {"min_throughput_ratio": float("nan")},
+                {"max_peak_memory_ratio": float("inf")},
+                {"max_cache_miss_ratio": float("nan")},
+            ):
+                with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                    ValueError, "finite"
+                ):
+                    compare_runs(
+                        baseline,
+                        candidate,
+                        expected_tokens=32,
+                        **kwargs,
+                    )
+
+    def test_throughput_gate_can_be_disabled_for_correctness_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = [
+                load_run(
+                    _write_run(root / "a.log", elapsed=1.0), label="baseline"
+                )
+            ]
+            candidate = [
+                load_run(
+                    _write_run(root / "b.log", elapsed=100.0), label="candidate"
+                )
+            ]
+            result = compare_runs(
+                baseline,
+                candidate,
+                expected_tokens=32,
+                min_throughput_ratio=None,
+                require_output_match=True,
+            )
+
+            self.assertTrue(result["pass"], result["violations"])
+            self.assertLess(result["ratios"]["median_wall_throughput"], 0.02)
+            self.assertIsNone(result["thresholds"]["min_throughput_ratio"])
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main([
+                    "--baseline", baseline[0].path,
+                    "--candidate", candidate[0].path,
+                    "--expected-tokens", "32",
+                    "--no-throughput-gate",
+                    "--require-output-match",
+                    "--compact",
+                ])
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(json.loads(stdout.getvalue())["pass"])
 
     def test_cli_writes_summary_and_uses_gate_exit_codes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -272,6 +358,41 @@ class MLXCompareTest(unittest.TestCase):
                 ])
             self.assertEqual(invalid_exit, 2)
             self.assertIn("does not exist", stderr.getvalue())
+
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                threshold_exit = main([
+                    "--baseline", str(baseline),
+                    "--candidate", str(candidate),
+                    "--expected-tokens", "32",
+                    "--min-throughput-ratio", "nan",
+                ])
+            self.assertEqual(threshold_exit, 2)
+            self.assertIn("must be finite", stderr.getvalue())
+
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                collision_exit = main([
+                    "--baseline", str(baseline),
+                    "--candidate", str(candidate),
+                    "--expected-tokens", "32",
+                    "--write-summary", str(baseline),
+                ])
+            self.assertEqual(collision_exit, 2)
+            self.assertIn("must not overwrite", stderr.getvalue())
+
+            blocker = root / "not-a-directory"
+            blocker.write_text("block", encoding="utf-8")
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                write_exit = main([
+                    "--baseline", str(baseline),
+                    "--candidate", str(candidate),
+                    "--expected-tokens", "32",
+                    "--write-summary", str(blocker / "summary.json"),
+                ])
+            self.assertEqual(write_exit, 2)
+            self.assertTrue(stderr.getvalue().startswith("ft mlx-compare:"))
 
 
 if __name__ == "__main__":
