@@ -126,8 +126,11 @@ def load_run(path: str | Path, *, label: str) -> RunRecord:
         if not isinstance(residency_data, dict):
             raise ValueError(f"residency must be an object or null: {resolved}")
         selected = residency_data.get("selected")
-        if selected is not None and not isinstance(selected, str):
-            raise ValueError(f"residency.selected must be a string: {resolved}")
+        if selected is not None and selected not in {"resident", "offload"}:
+            raise ValueError(
+                "residency.selected must be 'resident' or 'offload': "
+                f"{resolved}"
+            )
         residency = selected
 
     output_bytes = output.encode("utf-8")
@@ -146,8 +149,9 @@ def load_run(path: str | Path, *, label: str) -> RunRecord:
 
 
 def _median(values: list[float | int | None]) -> float | None:
-    present = [float(value) for value in values if value is not None]
-    return statistics.median(present) if present else None
+    if not values or any(value is None for value in values):
+        return None
+    return statistics.median(float(value) for value in values)
 
 
 def summarize(records: list[RunRecord]) -> dict[str, Any]:
@@ -168,6 +172,15 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
         "median_cache_misses": _median(
             [record.cache_misses for record in records]
         ),
+        "complete_metrics": {
+            "peak_memory": all(
+                record.peak_memory_bytes is not None for record in records
+            ),
+            "cache_misses": all(
+                record.cache_misses is not None for record in records
+            ),
+            "residency": all(record.residency is not None for record in records),
+        },
         "output_sha256": sorted({record.output_sha256 for record in records}),
         "residency": sorted(
             {record.residency for record in records if record.residency is not None}
@@ -181,20 +194,48 @@ def compare_runs(
     candidate: list[RunRecord],
     *,
     expected_tokens: int,
-    min_throughput_ratio: float = 0.97,
+    min_throughput_ratio: float | None = 0.97,
     max_peak_memory_ratio: float = 1.05,
     max_cache_miss_ratio: float | None = None,
     require_output_match: bool = False,
     require_same_residency: bool = False,
 ) -> dict[str, Any]:
-    if expected_tokens < 1:
-        raise ValueError("expected_tokens must be at least 1")
-    if min_throughput_ratio <= 0:
-        raise ValueError("min_throughput_ratio must be positive")
-    if max_peak_memory_ratio <= 0:
-        raise ValueError("max_peak_memory_ratio must be positive")
-    if max_cache_miss_ratio is not None and max_cache_miss_ratio <= 0:
-        raise ValueError("max_cache_miss_ratio must be positive")
+    if (
+        isinstance(expected_tokens, bool)
+        or not isinstance(expected_tokens, int)
+        or expected_tokens < 1
+    ):
+        raise ValueError("expected_tokens must be an integer of at least 1")
+    if min_throughput_ratio is not None:
+        min_throughput_ratio = _number(
+            min_throughput_ratio,
+            field="min_throughput_ratio",
+            positive=True,
+        )
+    max_peak_memory_ratio = _number(
+        max_peak_memory_ratio,
+        field="max_peak_memory_ratio",
+        positive=True,
+    )
+    if max_cache_miss_ratio is not None:
+        max_cache_miss_ratio = _number(
+            max_cache_miss_ratio,
+            field="max_cache_miss_ratio",
+            positive=True,
+        )
+
+    paths = [record.path for record in baseline + candidate]
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for path in paths:
+        if path in seen:
+            duplicates.add(path)
+        seen.add(path)
+    if duplicates:
+        raise ValueError(
+            "each run log may be selected only once; duplicates: "
+            + ", ".join(sorted(duplicates))
+        )
 
     baseline_summary = summarize(baseline)
     candidate_summary = summarize(candidate)
@@ -211,15 +252,20 @@ def compare_runs(
     candidate_tps = candidate_summary["median_wall_tokens_per_second"]
     throughput_ratio = None
     if baseline_tps is None or baseline_tps <= 0:
-        violations.append(
-            "throughput gate requires a positive baseline token rate; "
-            "check generated_tokens and elapsed_seconds"
-        )
+        if min_throughput_ratio is not None:
+            violations.append(
+                "throughput gate requires a positive baseline token rate; "
+                "check generated_tokens and elapsed_seconds"
+            )
     elif candidate_tps is None:
-        violations.append("throughput gate requires candidate timing metrics")
+        if min_throughput_ratio is not None:
+            violations.append("throughput gate requires candidate timing metrics")
     else:
         throughput_ratio = candidate_tps / baseline_tps
-        if throughput_ratio < min_throughput_ratio:
+        if (
+            min_throughput_ratio is not None
+            and throughput_ratio < min_throughput_ratio
+        ):
             violations.append(
                 f"throughput ratio {throughput_ratio:.6f} is below "
                 f"minimum {min_throughput_ratio:.6f}"
@@ -355,7 +401,15 @@ def build_parser(prog: str = "ft mlx-compare") -> argparse.ArgumentParser:
         help="candidate stdout log files; shell globs may be used",
     )
     parser.add_argument("--expected-tokens", type=int, required=True)
-    parser.add_argument("--min-throughput-ratio", type=float, default=0.97)
+    throughput = parser.add_mutually_exclusive_group()
+    throughput.add_argument(
+        "--min-throughput-ratio", type=float, default=0.97,
+        help="minimum candidate/baseline median token-rate ratio (default: 0.97)",
+    )
+    throughput.add_argument(
+        "--no-throughput-gate", action="store_true",
+        help="report throughput but do not fail on its ratio",
+    )
     parser.add_argument("--max-peak-memory-ratio", type=float, default=1.05)
     parser.add_argument(
         "--max-cache-miss-ratio", type=float,
@@ -379,14 +433,25 @@ def main(
     prog: str = "ft mlx-compare",
 ) -> int:
     args = build_parser(prog).parse_args(argv)
+    summary_path = (
+        args.write_summary.expanduser().resolve()
+        if args.write_summary is not None
+        else None
+    )
     try:
         baseline = [load_run(path, label="baseline") for path in args.baseline]
         candidate = [load_run(path, label="candidate") for path in args.candidate]
+        if summary_path is not None and str(summary_path) in {
+            record.path for record in baseline + candidate
+        }:
+            raise ValueError("--write-summary must not overwrite an input run log")
         result = compare_runs(
             baseline,
             candidate,
             expected_tokens=args.expected_tokens,
-            min_throughput_ratio=args.min_throughput_ratio,
+            min_throughput_ratio=(
+                None if args.no_throughput_gate else args.min_throughput_ratio
+            ),
             max_peak_memory_ratio=args.max_peak_memory_ratio,
             max_cache_miss_ratio=args.max_cache_miss_ratio,
             require_output_match=args.require_output_match,
@@ -396,12 +461,20 @@ def main(
         print(f"{prog}: {exc}", file=sys.stderr)
         return 2
 
-    payload = json.dumps(
-        result, sort_keys=True, indent=None if args.compact else 2
-    ) + "\n"
-    if args.write_summary is not None:
-        args.write_summary.parent.mkdir(parents=True, exist_ok=True)
-        args.write_summary.write_text(payload, encoding="utf-8")
+    try:
+        payload = json.dumps(
+            result,
+            sort_keys=True,
+            indent=None if args.compact else 2,
+            allow_nan=False,
+        ) + "\n"
+        if summary_path is not None:
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(payload, encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        print(f"{prog}: {exc}", file=sys.stderr)
+        return 2
+
     print(payload, end="")
     return 0 if result["pass"] else 1
 
