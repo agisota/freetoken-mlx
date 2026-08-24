@@ -209,19 +209,33 @@ def compare_runs(
 
     baseline_tps = baseline_summary["median_wall_tokens_per_second"]
     candidate_tps = candidate_summary["median_wall_tokens_per_second"]
-    throughput_ratio = candidate_tps / baseline_tps
-    if throughput_ratio < min_throughput_ratio:
+    throughput_ratio = None
+    if baseline_tps is None or baseline_tps <= 0:
         violations.append(
-            f"throughput ratio {throughput_ratio:.6f} is below "
-            f"minimum {min_throughput_ratio:.6f}"
+            "throughput gate requires a positive baseline token rate; "
+            "check generated_tokens and elapsed_seconds"
         )
+    elif candidate_tps is None:
+        violations.append("throughput gate requires candidate timing metrics")
+    else:
+        throughput_ratio = candidate_tps / baseline_tps
+        if throughput_ratio < min_throughput_ratio:
+            violations.append(
+                f"throughput ratio {throughput_ratio:.6f} is below "
+                f"minimum {min_throughput_ratio:.6f}"
+            )
 
+    all_records = baseline + candidate
+    missing_peak = [
+        record.path for record in all_records if record.peak_memory_bytes is None
+    ]
     baseline_peak = baseline_summary["median_peak_memory_bytes"]
     candidate_peak = candidate_summary["median_peak_memory_bytes"]
     peak_memory_ratio = None
-    if baseline_peak is None or candidate_peak is None:
+    if missing_peak:
         violations.append(
-            "peak-memory gate requires memory.peak_bytes in every comparison group"
+            "peak-memory gate requires memory.peak_bytes in every run; missing: "
+            + ", ".join(missing_peak)
         )
     elif baseline_peak == 0:
         peak_memory_ratio = 1.0 if candidate_peak == 0 else None
@@ -230,6 +244,7 @@ def compare_runs(
                 "candidate reports non-zero peak memory while baseline reports zero"
             )
     else:
+        # Both medians are non-null because every run was checked above.
         peak_memory_ratio = candidate_peak / baseline_peak
         if peak_memory_ratio > max_peak_memory_ratio:
             violations.append(
@@ -239,11 +254,15 @@ def compare_runs(
 
     cache_miss_ratio = None
     if max_cache_miss_ratio is not None:
+        missing_misses = [
+            record.path for record in all_records if record.cache_misses is None
+        ]
         baseline_misses = baseline_summary["median_cache_misses"]
         candidate_misses = candidate_summary["median_cache_misses"]
-        if baseline_misses is None or candidate_misses is None:
+        if missing_misses:
             violations.append(
-                "cache-miss gate requires expert_cache.misses in every comparison group"
+                "cache-miss gate requires expert_cache.misses in every run; missing: "
+                + ", ".join(missing_misses)
             )
         elif baseline_misses == 0:
             cache_miss_ratio = 1.0 if candidate_misses == 0 else None
@@ -252,6 +271,7 @@ def compare_runs(
                     "candidate reports cache misses while baseline reports zero"
                 )
         else:
+            # Both medians are non-null because every run was checked above.
             cache_miss_ratio = candidate_misses / baseline_misses
             if cache_miss_ratio > max_cache_miss_ratio:
                 violations.append(
@@ -260,13 +280,12 @@ def compare_runs(
                 )
 
     if require_output_match:
-        records = baseline + candidate
-        if any(record.output_bytes == 0 for record in records):
+        if any(record.output_bytes == 0 for record in all_records):
             violations.append(
                 "output matching was requested, but at least one stdout log has no "
                 "generated-text prefix before the JSON report"
             )
-        output_hashes = {record.output_sha256 for record in records}
+        output_hashes = {record.output_sha256 for record in all_records}
         if len(output_hashes) != 1:
             violations.append(
                 "generated output differs across baseline/candidate runs: "
@@ -274,11 +293,21 @@ def compare_runs(
             )
 
     if require_same_residency:
+        missing_residency = [
+            record.path for record in all_records if record.residency is None
+        ]
         baseline_residency = set(baseline_summary["residency"])
         candidate_residency = set(candidate_summary["residency"])
-        if not baseline_residency or not candidate_residency:
+        if missing_residency:
             violations.append(
-                "residency matching was requested, but residency.selected is missing"
+                "residency matching requires residency.selected in every run; missing: "
+                + ", ".join(missing_residency)
+            )
+        elif len(baseline_residency) != 1 or len(candidate_residency) != 1:
+            violations.append(
+                "each group must use one residency path: "
+                f"baseline={sorted(baseline_residency)} "
+                f"candidate={sorted(candidate_residency)}"
             )
         elif baseline_residency != candidate_residency:
             violations.append(
@@ -339,8 +368,7 @@ def build_parser(prog: str = "ft mlx-compare") -> argparse.ArgumentParser:
         help="also write the comparison JSON to this path",
     )
     parser.add_argument(
-        "--compact", action="store_true",
-        help="print compact JSON instead of indented JSON",
+        "--compact", action="store_true", help="print compact JSON instead of indented JSON"
     )
     return parser
 
