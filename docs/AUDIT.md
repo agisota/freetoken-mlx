@@ -12,15 +12,17 @@ The largest repository risk is separation, not a fake backend. The tree still co
 
 The next material MLX gains are also above an isolated GEMV: route synchronization, cache misses, storage locality, bytes per expert, and reused prompt/KV state.
 
-This PR improves the control plane by adding:
+This PR now improves the control plane with:
 
-- a pure-stdlib `ft mlx-compare` gate for captured runs;
-- exact generated-token, output, throughput, peak-memory, cache-miss, and residency checks;
-- generic CI for torch-free MLX CLI/cache/comparator behavior on Python 3.10 and 3.13;
+- `ft mlx-capture`, an atomic per-run bundle with stdout/stderr, hashes, host/package/git metadata, prompt redaction, timeouts, and structured failure states;
+- `ft mlx-compare`, a strict schema-versioned parser and A/B gate for exact tokens, byte-exact output, sample completeness, balance, noise, throughput, memory, cache misses, and residency;
+- a versioned runtime generation layer with rendered-prompt fingerprints, first-output latency, prompt/decode rates, finish reason, speculative accounting, and requested KV/prefill controls;
+- fail-fast support for rotating KV, ordinary Q4/Q8 KV quantization, and explicit prefill chunking within the actual `mlx-lm 0.31` compatibility envelope;
+- generic CI for torch-free MLX CLI/cache/generation/capture/comparison behavior on Python 3.10 and 3.13;
 - an Apple-Silicon real-checkpoint validation procedure in `tests/MLX.md`;
-- documentation corrections for quantization, speculation, evaluation cadence, and failed prefetch experiments.
+- documentation corrections for quantization, speculation, evaluation cadence, failed prefetch experiments, clean OOM behavior, and long-context constraints.
 
-It does not add an Apple-Silicon runner or change the Metal runtime.
+It does not add an Apple-Silicon runner or change route computation, expert math, or Metal kernels.
 
 ## Findings
 
@@ -45,7 +47,7 @@ This release-safety work must precede multi-Mac experiments or public MLX artifa
 
 ### P0 — No Apple-Silicon CI executes the real backend
 
-The new generic CI compiles sources and tests the torch-free control plane. It intentionally cannot validate Metal execution, unified-memory pressure, private MLX kernel-template compatibility, or real-checkpoint output.
+The generic CI compiles sources and tests the torch-free control plane. It intentionally cannot validate Metal execution, unified-memory pressure, private MLX kernel-template compatibility, real-checkpoint output, or long-context quality.
 
 A complete Mac lane needs:
 
@@ -53,8 +55,9 @@ A complete Mac lane needs:
 2. MLX unit tests for every supported MLX/mlx-lm pair;
 3. a pinned small real-checkpoint smoke test;
 4. resident/offload output comparison;
-5. raw benchmark artifacts and regression thresholds;
-6. pressure/OOM behavior under a fixed safety envelope.
+5. ordinary, rotating, Q4-KV, and Q8-KV long-context cases;
+6. raw capture bundles and regression thresholds;
+7. pressure/OOM behavior under a fixed safety envelope.
 
 Until then, `tests/MLX.md` is a manual procedure, not continuous proof.
 
@@ -76,36 +79,42 @@ Experiments:
 
 The loader retains `(safetensors path, tensor key)` references. This avoids stacked resident experts, but a miss still follows Hugging Face shard layout.
 
-Build and compare an expert-oriented artifact with contiguous gate/up/down payloads per `(layer, expert)`. Use the same route trace and quantization, and record bytes, page faults, p50/p95 miss latency, TTFT, throughput, disk size, and conversion cost.
+Build and compare an expert-oriented artifact with contiguous gate/up/down payloads per `(layer, expert)`. Use the same route trace and quantization, and record bytes, page faults, p50/p95 miss latency, first-output latency, throughput, disk size, and conversion cost.
 
-### P0 — Prompt and KV controls are missing
+### P0 — Persistent prompt cache and real KV validation remain
 
-Generation delegates to `mlx_lm.stream_generate` without exposing prompt-cache, supported rotating KV, KV quantization, or prefill-step controls.
+The CLI now exposes the supported upstream generation controls:
 
-Add:
+- `max_kv_size` for non-speculative rotating KV;
+- Q4/Q8 ordinary KV quantization with group size and start offset;
+- explicit prefill chunk size;
+- rendered-prompt hash and token/rate metrics;
+- first-output latency, decode rate, derived durations, and finish reason.
 
-- persistent prompt-cache load/save;
-- `max_kv_size` for non-speculative generation;
-- KV bits/group size/start step;
-- prefill step size;
-- TTFT, prefill tok/s, and decode tok/s.
+It also rejects unsupported combinations before model loading:
 
-Compatibility must be explicit: mlx-lm 0.31 ignores `max_kv_size` under speculative decoding.
+- rotating KV with a draft model;
+- rotating KV with KV quantization, because `RotatingKVCache.to_quantized` is not implemented in `mlx-lm 0.31`;
+- a rotating limit that does not exceed the four retained prefix tokens.
 
-### P1 — Runtime reporting is useful but not yet a stable schema
+Remaining work:
 
-The runtime JSON already contains memory, residency, cache, timing, and speculative fields. The new comparator gives comparison artifacts `schema_version: 1`, but the source runtime report itself is still unversioned.
+- persistent prompt-cache load/save for repeated prefixes;
+- Apple-Silicon A/B evidence for each KV mode and prefill size;
+- quality evaluation for quantized KV;
+- long-context pressure tests that account for both KV and expert-cache residency.
 
-Add to the runtime report:
+### P1 — Runtime and evidence schemas are versioned but still incomplete
 
-- schema version and git commit;
-- Python/macOS/MLX/mlx-lm versions;
-- hardware identifier and memory;
-- model revision and config/checkpoint fingerprint;
-- prompt hash;
-- TTFT/prefill/decode split;
-- miss latency quantiles;
-- grouped-kernel template hash and fallback reason.
+The generation report now has `runtime_report_schema_version: 1` and includes rendered-prompt fingerprints, prompt/decode split, first-output latency, requested KV settings, finish reason, and corrected speculative acceptance. The comparison schema is version 2. Capture manifests are version 1 and add source-log/report hashes, host/package/git metadata, safe environment fields, command provenance, and structured status.
+
+Still missing or incomplete:
+
+- resolved model revision and config/checkpoint fingerprint in every runtime report;
+- exact MLX/private-kernel template hash and fallback reason;
+- miss-service latency quantiles;
+- a process-level cold-start split for download, model load, prefill, and first token;
+- a compatibility/migration policy for future schema versions.
 
 ### P1 — Memory prediction remains heuristic
 
@@ -144,12 +153,13 @@ Do not use naive previous-token same-layer prefetch as a recommendation: measure
 
 ### P1 — Test coverage is behavior-heavy and integration-light
 
-Existing tests cover cache semantics, quantized math, residency decisions, CLI handling, shard lifetime, conversion, and tokenizer compatibility. This PR adds comparison-gate tests and a manual real-checkpoint procedure.
+Pure-Python coverage now includes cache semantics, quantized math, residency decisions, CLI handling, generation-option forwarding, compatibility guards, speculative-accounting deduplication, shard lifetime, conversion, strict runtime-log parsing, atomic capture bundles, prompt redaction, timeout/failure states, and A/B gates.
 
 Still missing from automated Mac CI:
 
 - native resident versus offload output on the same checkpoint;
 - deterministic output across cache sizes/policies for exact paths;
+- ordinary versus rotating versus quantized KV on real long prompts;
 - pressure recovery under a tight envelope;
 - private-kernel fallback;
 - speculative correctness and acceptance;
@@ -168,7 +178,7 @@ A clearer shape:
 
 ```text
 python/freetoken/          shared/upstream core
-python/freetoken/mlx/      MLX backend, cache, conversion, comparison
+python/freetoken/mlx/      MLX backend, generation, cache, conversion, capture, comparison
 scripts/mlx/               MLX benchmark/install helpers
 scripts/cuda/              inherited CUDA packaging
 tests/mlx/                 MLX tests and fixtures
@@ -195,7 +205,18 @@ Trust boundaries:
 - a self-hosted CUDA build runner must remain unreachable from fork PR code;
 - publication credentials must remain separated and reviewer-gated.
 
-Hardening:
+Hardening already added to benchmark evidence:
+
+- strict JSON rejects duplicate keys and non-finite constants;
+- numeric counters are bounded to a signed 64-bit range;
+- log and final-report sizes are capped;
+- output is hashed as raw bytes without newline normalization;
+- capture output cannot overwrite an existing path or broken symlink;
+- prompt text is excluded from capture metadata unless explicitly requested;
+- only an allowlist of non-secret environment fields is recorded;
+- failed and timed-out runs preserve evidence without being presented as successful runtime reports.
+
+Remaining hardening:
 
 - support and report an exact model revision;
 - fingerprint config and checkpoint metadata;
@@ -214,26 +235,33 @@ Validated from source and pure-Python execution:
 - LRU/SLRU semantics;
 - quantization metadata and storage accounting;
 - tokenizer compatibility checks;
-- runtime report parsing;
-- exact-token/output/memory/cache/residency comparison gates;
-- CLI dispatch without importing CUDA;
+- extended generation-option forwarding and compatibility guards;
+- rendered-prompt, prompt/decode, KV-setting, finish-reason, and first-output report fields;
+- speculative acceptance is not double-counted on the final repeated response;
+- atomic capture bundles, prompt redaction, hashes, timeouts, and structured failures;
+- strict token/output/memory/cache/residency/sample/noise comparison gates;
+- CLI dispatch without importing CUDA or MLX for control-plane help/tests;
 - Linux/CUDA package and installer mismatch with the repository's MLX name.
+
+Local control-plane validation for the new generation, capture, and comparison layers completed 48 tests. This does not substitute for the missing Mac lane.
 
 Not executed in this environment:
 
 - real Apple-Silicon generation;
+- real rotating or quantized KV behavior on Qwen MoE;
 - Metal kernel compatibility/performance;
 - unified-memory pressure/OOM behavior;
 - real-checkpoint quality comparisons.
 
 ## Recommended implementation order
 
-1. add a pinned Apple-Silicon CI/benchmark lane and version the runtime report;
+1. add a pinned Apple-Silicon CI/benchmark lane;
 2. split MLX package/release identity from inherited CUDA publication;
-3. expose prompt/KV/prefill controls and split TTFT/prefill/decode metrics;
-4. add route traces, miss latency, and an offline cache simulator;
-5. prototype contiguous expert storage;
-6. implement trace-based prefetch that beats the 26.5% overlap baseline;
-7. evaluate `mx.compile()` on stable subgraphs;
-8. prototype device-side resident/miss lookup;
-9. only then evaluate multi-Mac/JACCL scaling.
+3. add persistent prompt-cache load/save and validate ordinary/rotating/Q4/Q8 KV plus prefill settings on real long contexts;
+4. add resolved model/checkpoint/kernel fingerprints and miss-latency quantiles;
+5. add route traces and an offline cache simulator;
+6. prototype contiguous expert storage;
+7. implement trace-based prefetch that beats the 26.5% overlap baseline;
+8. evaluate `mx.compile()` on stable subgraphs;
+9. prototype device-side resident/miss lookup;
+10. only then evaluate multi-Mac/JACCL scaling.
