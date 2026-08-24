@@ -7,12 +7,18 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
 from freetoken.cli import main as cli_main  # noqa: E402
-from freetoken.mlx_compare import compare_runs, load_run, main  # noqa: E402
+from freetoken.mlx_compare import (  # noqa: E402
+    MAX_LOG_BYTES,
+    compare_runs,
+    load_run,
+    main,
+)
 
 
 def _report(
@@ -194,6 +200,34 @@ class MLXCompareTest(unittest.TestCase):
                 b'"residency":{"selected":"offload"}}\n'
             )
             with self.assertRaisesRegex(ValueError, "non-finite JSON constant"):
+                load_run(path, label="baseline")
+
+    def test_excessive_json_nesting_is_a_controlled_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "deep.log"
+            nested = b"[" * 12_000 + b"0" + b"]" * 12_000
+            report = (
+                b'{"backend":"mlx","generated_tokens":32,'
+                b'"elapsed_seconds":1,"memory":{"peak_bytes":1},'
+                b'"expert_cache":{"misses":1},'
+                b'"residency":{"selected":"offload"},"deep":'
+                + nested
+                + b"}"
+            )
+            path.write_bytes(b"text\n" + report + b"\n")
+            with self.assertRaisesRegex(ValueError, "nesting depth"):
+                load_run(path, label="baseline")
+
+    def test_oversized_log_is_rejected_before_reading_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oversized.log"
+            with path.open("wb") as stream:
+                stream.truncate(MAX_LOG_BYTES + 1)
+            with patch.object(
+                Path,
+                "read_bytes",
+                side_effect=AssertionError("oversized log payload was read"),
+            ), self.assertRaisesRegex(ValueError, "run log is too large"):
                 load_run(path, label="baseline")
 
     def test_missing_peak_memory_cannot_bypass_default_gate(self):
