@@ -73,8 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_options(args: argparse.Namespace) -> GenerationOptions:
-    if args.max_kv_size is not None and args.max_kv_size < 8:
-        raise ValueError("--max-kv-size must be at least 8")
+    if args.max_kv_size is not None and args.max_kv_size <= 4:
+        raise ValueError(
+            "--max-kv-size must exceed the four retained prefix tokens"
+        )
     if args.quantized_kv_start < 0:
         raise ValueError("--quantized-kv-start cannot be negative")
     if args.prefill_step_size is not None and args.prefill_step_size < 1:
@@ -82,6 +84,11 @@ def _validate_options(args: argparse.Namespace) -> GenerationOptions:
     if args.draft_model is not None and args.max_kv_size is not None:
         raise ValueError(
             "--max-kv-size is not supported with --draft-model by mlx-lm 0.31"
+        )
+    if args.max_kv_size is not None and args.kv_bits is not None:
+        raise ValueError(
+            "--max-kv-size cannot be combined with --kv-bits because "
+            "mlx-lm 0.31 cannot quantize RotatingKVCache"
         )
     return GenerationOptions(
         max_kv_size=args.max_kv_size,
