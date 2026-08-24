@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import sys
 import unittest
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -352,6 +352,16 @@ class MLXGenerateTest(unittest.TestCase):
         self.assertIn("--max-kv-size", help_text)
         self.assertIn("--kv-bits {4,8}", help_text)
         self.assertIn("--prefill-step-size", help_text)
+
+    def test_abbreviated_long_options_are_rejected(self):
+        stderr = StringIO()
+        with fake_backend(), redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            main([
+                "--backend", "mlx", "--model", "target",
+                "--prom", "secret",
+            ])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
 
     def test_invalid_cli_option_exits_with_argparse_code_two(self):
         with fake_backend(), self.assertRaises(SystemExit) as raised:
