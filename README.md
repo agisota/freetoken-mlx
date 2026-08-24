@@ -1,315 +1,364 @@
 # FreeToken-MLX
 
-**Реальный бэкенд FreeToken с expert-cache/offload для Apple Silicon, где MLX
-исполняет только выбранных экспертов Qwen MoE.**
+Bounded MoE expert offload for Apple Silicon.
 
-> [!IMPORTANT]
-> FreeToken-MLX — независимо поддерживаемый исследовательский форк
-> [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken). Это не
-> официальный релиз FlashML. Проект сохраняет кодовую базу FreeToken и его
-> архитектуру банка экспертов (expert bank), а не строит отдельный фреймворк
-> для инференса.
+FreeToken-MLX is an independently maintained fork of [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken). The upstream CUDA/Torch engine remains in the repository. The Apple-Silicon implementation is a separate MLX backend in `python/freetoken/mlx_backend.py`.
 
-## Зачем нужен этот проект
+## Scope
 
-Нативный `mlx-lm` — самый быстрый путь, когда модель безопасно помещается в
-unified memory. Крупные BF16-чекпойнты MoE помещаются не всегда: на тестовом Mac
-с 16 ГБ стоковый `mlx-lm` загружал Qwen1.5-MoE с заявленным пиком 28.63 ГБ и
-падал до первого сгенерированного токена. FreeToken-MLX делает ту же модель
-запускаемой: плотные/разделяемые веса остаются резидентными, а маршрутизируемые
-эксперты загружаются через реальный банк экспертов FreeToken и ограниченный LRU-
-кэш.
+The backend solves one concrete problem: run `Qwen/Qwen1.5-MoE-A2.7B` on Macs where full residency is unsafe.
 
-Поэтому гибридная политика по умолчанию оптимизирует и скорость, и доступность:
+It keeps dense and shared weights resident, materializes only routed experts, and bounds their cross-layer cache. When the full checkpoint fits, `--residency auto` selects native `mlx-lm` instead of paying the offload overhead.
 
-- использовать нативный резидентный MLX, когда размер чекпойнта, лимит рабочего
-  набора MLX и текущее давление памяти macOS говорят, что это безопасно;
-- использовать offload экспертов FreeToken, когда нативная резидентность грозит
-  OOM;
-- отказываться от запуска, когда ни один путь не может сохранить запрошенный
-  системный резерв памяти.
+Current MLX support:
 
-## Основные вклады
+- macOS on Apple Silicon;
+- `model_type=qwen2_moe`, tested with `Qwen/Qwen1.5-MoE-A2.7B`;
+- batch size 1 and local text generation;
+- BF16, full MLX quantization, and BF16-dense/quantized-expert checkpoints;
+- LRU and warm-up SLRU expert eviction;
+- optional speculative decoding;
+- bounded MLX working-set, allocator-cache, and system-headroom controls;
+- rotating KV, quantized KV, and explicit prefill chunk controls supported by the pinned `mlx-lm` generation API;
+- machine-readable capture, runtime, and A/B comparison reports.
 
-| Вклад | Практическая ценность |
-| --- | --- |
-| Реальное переиспользование FreeToken | Банк экспертов, admission в кэш, учёт попаданий/промахов, вытеснение и offload участвуют в реальной генерации токенов. |
-| Адаптивная гибридная резидентность | Сохраняет нативную производительность MLX для моделей, которые помещаются, и переключается до загрузки, когда резидентный инференс небезопасен. |
-| Квантизация только экспертов | Плотные веса, attention, роутер и shared-expert остаются BF16, а маршрутизируемые эксперты используют равномерный Q4 или опциональную precision с учётом проекций. |
-| Единое бюджетирование памяти | Учитывает плотные веса, кэш экспертов, опциональный speculative draft, рантайм-резерв и текущее давление macOS. |
-| Оптимизация на основе доказательств | Отчёты об отклонённых оптимизациях и контролируемых A/B-результатах вместо подачи каждого эксперимента как ускорения. |
+This is not a complete MLX port of FreeToken. CUDA attention, serving, scheduling, distributed execution, and most upstream model support remain CUDA/Torch code.
 
-## Измеренная ценность
+## Why offload exists
 
-Результаты ниже получены на Apple M4 с 16 ГБ unified memory при batch size 1.
-Это воспроизводимые измерения для указанных промптов и версий, а не общие
-гарантии производительности.
+Native `mlx-lm` is the preferred path when the checkpoint fits. Offload adds route synchronization, cache admission, safetensors access, and expert materialization.
 
-| Путь Qwen1.5-MoE-A2.7B | Результат | Пик памяти MLX |
+Its value is capacity:
+
+1. **resident** — use native MLX when the estimated peak fits all safety budgets;
+2. **offload** — keep only routed experts resident when full residency is unsafe or the checkpoint uses FreeToken's expert-only format;
+3. **fail early** — refuse to start when dense weights, runtime state, an optional draft, and requested macOS headroom leave too little memory for one expert.
+
+## Measured reference results
+
+Apple M4, 16 GB unified memory, batch size 1:
+
+| Path | Throughput | Peak MLX memory |
 | --- | ---: | ---: |
-| Стоковый `mlx-lm`, BF16 | Metal OOM до токена 1 | заявлено 28.63 ГБ |
-| Offload FreeToken, BF16 (консервативный кэш) | 1.88 tok/s | 5.83 ГБ |
-| Offload FreeToken, BF16 (безопасно расширенный кэш, 128 токенов) | 2.05 tok/s | 9.03 ГБ |
-| FreeToken BF16-dense/Q4-experts | 4.49 tok/s | 7.93 ГБ |
-| Нативный резидентный MLX, полный Q4 | выбирается автоматически, когда безопасно | около 8.8 ГБ |
+| native `mlx-lm`, BF16 | Metal OOM before token 1 | reported 28.63 GB |
+| FreeToken offload, BF16 | 1.88 tok/s | 5.83 GB |
+| FreeToken offload, BF16, larger safe cache | 2.05 tok/s | 9.03 GB |
+| BF16 dense + Q4 experts | 4.49 tok/s | 7.93 GB |
+| native resident full-Q4 | selected automatically when safe | ~8.8 GB |
 
-В контролируемом свипе Q4-кэша экспертов (64 токена, три свежих процесса на
-точку, ротация порядка и кулдауны по 45 секунд) увеличение кэша с 55 до 275
-экспертов подняло измеренный пик памяти MLX с 5.33 ГБ до 6.42 ГБ, снизило число
-промахов кэша на 31.4% и подняло медианную пропускную способность с 3.02 до
-3.16 tok/s. Диапазоны прогонов пересекались, поэтому это свидетельство надёжного
-трейдоффа «промахи — память» и лишь умеренного тренда пропускной способности,
-а не большого или статистически значимого выигрыша.
+A controlled Q4 cache sweep from 55 to 275 experts reduced misses by 31.4%; median throughput moved from 3.02 to 3.16 tok/s with overlapping run ranges. The defensible result is fewer loads for more memory, not a large universal speedup.
 
-Главная ценность — не утверждение, что offload всегда превосходит нативный MLX.
-Это улучшение Парето: сохранять нативную скорость, когда резидентность безопасна,
-и держать модели пригодными через ограниченный offload FreeToken, когда нативный
-MLX упал бы.
+The strongest offload gain came from reducing expert bytes, not from another isolated GEMV tweak. See [`docs/MLX_PERFORMANCE_TUNING_GUIDE.md`](docs/MLX_PERFORMANCE_TUNING_GUIDE.md).
 
-См. [руководство по тюнингу производительности и сбоям](docs/MLX_PERFORMANCE_TUNING_GUIDE.md)
-— там описаны контролируемая методология, принятые оптимизации, отклонённые
-эксперименты и доказательства за текущими значениями по умолчанию.
-
-[Черновик для NeurIPS 2026 ML for Systems Workshop](paper/main.tex) и его
-[аудит готовности к подаче](paper/SUBMISSION_READINESS.md) суммируют дизайн,
-контролируемые результаты, ограничения и связь с апстримом FreeToken.
-
-## Поддерживаемая область
-
-- Apple Silicon (`macOS arm64`)
-- `Qwen/Qwen1.5-MoE-A2.7B` (`model_type=qwen2_moe`)
-- batch size 1 и локальная генерация текста
-- BF16, глобально квантованные MLX-чекпойнты и чекпойнты BF16-dense/quantized-expert
-
-В этом первом бэкенде намеренно нет сервера, распределённого рантайма,
-мульти-модельного расширения, mock-пути экспертов или собственных CUDA/Triton/Metal
-ядер.
-
-## Быстрый старт
+## Install
 
 ```bash
 git clone https://github.com/agisota/freetoken-mlx.git
 cd freetoken-mlx
 uv venv --python 3.12 --seed
 uv pip install -e '.[mlx]'
-.venv/bin/ft generate --backend mlx --model Qwen/Qwen1.5-MoE-A2.7B --prompt 'Hello' --raw-prompt --max-tokens 1 --batch-size 1 --moe-cache-size 4
 ```
 
-Первый запуск скачивает модель с Hugging Face. Финальный JSON-отчёт включает
-выбранный путь резидентности, бюджеты решений, пропускную способность, пик
-памяти MLX и реальные счётчики кэша экспертов.
+The root `install.sh` is the inherited Linux/NVIDIA installer. It does not install the MLX backend.
 
-## Как это работает
+## Quick start
 
-Первый MLX-бэкенд поддерживает только `Qwen/Qwen1.5-MoE-A2.7B`, batch size 1 и
-локальную генерацию. Плотные операции Qwen исполняет MLX; маршрутизируемые
-эксперты отсоединяются от модели и обслуживаются через единый кросс-слойный банк
-экспертов FreeToken и LRU offload-кэш. Каждый выбранный эксперт материализуется
-при промахе кэша и вычисляется MLX. События попаданий, промахов и вытеснений
-кэша пишутся в stderr.
+Minimal offload smoke test:
 
 ```bash
-uv venv --python 3.12 --seed && uv pip install -e '.[mlx]' && .venv/bin/ft generate --backend mlx --model Qwen/Qwen1.5-MoE-A2.7B --prompt 'Hello' --raw-prompt --max-tokens 1 --batch-size 1 --moe-cache-size 4
+.venv/bin/ft generate \
+  --backend mlx \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 1 \
+  --batch-size 1 \
+  --residency offload \
+  --moe-cache-size 4
 ```
 
-Этот путь не собирает и не импортирует CUDA-расширения на macOS. Небольшой кэш,
-например 4, рекомендуется на Mac с 16 GiB — так легко наблюдать вытеснение.
-По умолчанию FreeToken ограничивает MLX 90% рекомендованного Metal рабочего
-набора и ограничивает free-buffer кэш аллокатора 256 МиБ, оставляя запас macOS
-и другим приложениям. Используйте `--memory-limit-gb`, чтобы ещё снизить потолок.
-
-Резидентность адаптивна по умолчанию. Перед загрузкой весов FreeToken оценивает
-нативный пик mlx-lm по целевому и опциональному draft-чекпойнтам, резервирует
-2 ГБ для macOS и других процессов, проверяет рекомендованный рабочий набор MLX
-и опрашивает текущее давление памяти macOS. Он использует нативный резидентный
-mlx-lm, когда все бюджеты безопасны, и переключается на реальный путь банка
-экспертов/offload FreeToken иначе. JSON-отчёт записывает выбранный путь, бюджеты,
-оценку и причину в `residency`. Используйте `--system-headroom-gb`, чтобы
-зарезервировать больше памяти, или `--residency resident|offload`, чтобы
-переопределить решение для измерений и отладки. Смешанные чекпойнты «только
-эксперты» всегда выбирают offload FreeToken. Когда включено speculative decoding,
-draft в резиденте вычитается из бюджета кэша экспертов; FreeToken отказывается от
-запуска, если запрошенный резерв невозможно сохранить.
-
-Для длинных генераций `--profile performance` использует протестированный больший
-кэш экспертов, оценивает граф MLX каждые восемь слоёв MoE, позволяет декоду
-материализовать веса экспертов в этом ограниченном графе и диспетчеризует
-выбранных top-4 экспертов через установленный шаблон BF16 GEMV в MLX. Квантованные
-эксперты используют адаптивный сегментированный LRU: его защищённый сегмент остаётся
-малым во время коротких запросов, затем удерживает экспертов, оказавшихся горячими
-в течение долгого декода. Он также отправляет независимого shared expert до CPU-
-admission в кэш, перекрывая свои вычисления Metal поиском safetensors при промахах.
-На M4 16GB Qwen1.5-MoE-A2.7B BF16 генерировал 32 токена со скоростью 1.88 tok/s
-против 1.43 tok/s у стабильного профиля, с идентичным выводом и пиком MLX 5.83 ГБ.
-В чередующемся A/B той же сессии перекрытие shared-expert сократило медиану
-32 токенов с 17.56 до 17.01 секунды; пара из 64 токенов заняла 34.45 против
-33.95 секунды. Передайте `--no-async-overlap` или `--no-grouped-gemv`, чтобы
-изолировать любую из этих оптимизаций:
+Measured performance preset:
 
 ```bash
-.venv/bin/ft generate --backend mlx --model Qwen/Qwen1.5-MoE-A2.7B --prompt Hello --raw-prompt --max-tokens 32 --profile performance --quiet-cache
+.venv/bin/ft generate \
+  --backend mlx \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 32 \
+  --profile performance \
+  --quiet-cache
 ```
 
-Для контролируемых измерений Парето `--expert-cache-budget-gb` ограничивает только
-кэш экспертов и всё равно зажимается живым бюджетом безопасной памяти FreeToken.
-
-Профиль BF16 performance теперь использует иначе простаивающий безопасный бюджет
-под больший кэш экспертов. При том же фиксированном лимите MLX 10 ГБ и системном
-резерве 3.2 ГБ он поднял ёмкость со 121 до 304 экспертов. В контролируемых прогонах
-промахи упали с 2 353 до 1 949 за 32 токена и с 9 672 до 8 183 за 128 токенов.
-Прогон на 128 токенов улучшился с 64.59 до 62.33 секунды (около 3.6%, или
-2.05 tok/s), тогда как пик памяти MLX вырос с 5.86 ГБ до 9.03 ГБ. Бюджет остаётся
-ограниченным текущим давлением памяти macOS, резервами dense/runtime/draft и явным
-лимитом MLX; `--profile stable` сохраняет консервативную долю BF16-кэша 20%.
-
-Чтобы профилировать реальный путь offload без добавления точек синхронизации,
-добавьте `--detailed-timing`. JSON-отчёт разделяет открытие шардов, admission в
-кэш, построение Python-графа, явные вычисления и синхронизацию роутера.
-`route_sync_ms` включает зависимый граф MLX, который должен завершиться до того,
-как ID экспертов можно прочитать на CPU; это не просто стоимость конвертации четырёх
-индексов.
-
-Квантованные чекпойнты экспертов автоматически удерживают разобранные маппинги
-до восьми шардов safetensors, продолжая удалять каждый потреблённый массив
-эксперта из маппинга. Это избавляет от повторного разбора тысяч упакованных
-записей weight/scale/bias, не удерживая вытесненные веса экспертов живыми.
-При фиксированном кэше на 600 экспертов и том же лимите MLX 10 ГБ это подняло
-полный-Q4 декод примерно с 3.6 до 5.0 tok/s, а декод BF16-dense/Q4-expert —
-с 3.20 до 4.42 tok/s на тестовом M4. Чистый BF16 сохраняет консервативное значение
-по умолчанию в один шард, потому что удержание большего числа маппингов не улучшило
-его измеренную пропускную способность. Переопределите автоматический выбор через
-`--shard-cache-size` при профилировании другого чекпойнта.
-
-При фиксированном кэше на 864 эксперта адаптивная политика изменила 32-токенный
-прогон mixed-Q4 всего на один промах (1 128 против 1 127 у LRU). За 128
-сгенерированных токенов она снизила промахи с 3 801 до 3 489 (8.2%) и сократила
-время выполнения со среднего по двум прогонам LRU 18.47 секунды до 17.12 секунды
-в валидационном прогоне — примерно на 4% выше пропускная способность. Пик памяти
-MLX остался 8.02 ГБ. `--profile stable` и чисто-BF16 чекпойнты сохраняют исходную
-политику LRU; используйте `--cache-policy lru`, чтобы явно воспроизвести базлайн.
-
-Аффинно-квантованные MLX-чекпойнты также обслуживаются через тот же банк
-экспертов и кэш FreeToken. Упакованные веса, scales и biases загружаются только
-для выбранных экспертов; JSON-отчёт идентифицирует формат в
-`expert_quantization`. На том же M4 16GB 4-битный чекпойнт ниже генерировал
-32 токена со скоростью 4.35 tok/s (7.35 секунды) против 1.88 tok/s у BF16.
-Его пик 5.71 ГБ включал 1 286 реальных промахов кэша и 439 вытеснений:
+For controlled measurements, pin the path and memory envelope:
 
 ```bash
-.venv/bin/ft generate --backend mlx --model mlx-community/Qwen1.5-MoE-A2.7B-4bit --prompt Hello --raw-prompt --max-tokens 32 --profile performance --residency offload --quiet-cache
+.venv/bin/ft generate \
+  --backend mlx \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 32 \
+  --profile performance \
+  --residency offload \
+  --memory-limit-gb 10 \
+  --system-headroom-gb 3.2 \
+  --expert-cache-budget-gb 4 \
+  --quiet-cache \
+  --detailed-timing
 ```
 
-Speculative decoding — опция opt-in, потому что она разменивает память на скорость
-и зависит от согласия target/draft. FreeToken проверяет перед генерацией, что оба
-токенизатора имеют идентичные token IDs. С подходящим draft Qwen1.5 0.5B и
-предложением по умолчанию в два токена чередующиеся A/B-прогоны на 64 токена на
-тестовом M4 улучшились с базлайна 12.77 секунды до 11.45 секунды (около 11.5%);
-57.8% выходных токенов пришло от draft. Пик памяти MLX вырос с 5.71 ГБ до 6.31 ГБ.
-Короткая генерация на 8 токенов была медленнее, поэтому не включайте это для очень
-коротких ответов:
+`--max-tokens` is an upper bound: generation can stop earlier on EOS. Do not label a run “32-token” unless the final JSON reports `generated_tokens: 32`.
+
+## Expert-only quantization
+
+The converter preserves dense, attention, router, and shared-expert tensors and quantizes only routed experts. It processes one shard at a time instead of loading the complete BF16 checkpoint as one resident model.
+
+Conservative Q4 experts:
 
 ```bash
-.venv/bin/ft generate --backend mlx --model mlx-community/Qwen1.5-MoE-A2.7B-4bit --draft-model mlx-community/Qwen1.5-0.5B-4bit --num-draft-tokens 2 --prompt Hello --raw-prompt --max-tokens 64 --profile performance --residency offload --quiet-cache
+.venv/bin/ft mlx-quantize-experts \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --output ./Qwen1.5-MoE-A2.7B-BF16-Q4Experts \
+  --bits 4 \
+  --group-size 64
+
+.venv/bin/ft generate \
+  --backend mlx \
+  --model ./Qwen1.5-MoE-A2.7B-BF16-Q4Experts \
+  --prompt Hello --raw-prompt --max-tokens 32 \
+  --profile performance --quiet-cache
 ```
 
-Эксперимент с группировкой квантованных экспертов был отклонён, а не выпущен как
-заявленная оптимизация: динамическая укладка четырёх закэшированных упакованных
-строк для MLX `gather_qmm` увеличила медиану 32 токенов с 7.08 до 7.92 секунды.
-Будущий собственный упакованный формат потребовал бы уже смежных слотов кэша;
-переписывание Metal-ядра не оправдано текущими данными.
-
-#### BF16 dense + квантованные маршрутизируемые эксперты
-
-FreeToken может сохранить BF16-веса dense, attention, роутера и shared-expert,
-квантизуя только банк маршрутизируемых экспертов. Этот смешанный чекпойнт специфичен
-для контракта банка FreeToken (`freetoken_expert_quantization` в `config.json`)
-и создаётся шард за шардом, поэтому оригинальный чекпойнт на 28.6 ГБ никогда не
-должен быть резидентным как одна MLX-модель во время конверсии. Полная конверсия
-использовала измеренный пик MLX 5.03 ГБ на тестовой машине:
+Experimental Q3 up/gate with Q4 down:
 
 ```bash
-.venv/bin/ft mlx-quantize-experts --model Qwen/Qwen1.5-MoE-A2.7B --output ./Qwen1.5-MoE-A2.7B-BF16-Q4Experts --bits 4 --group-size 64
-.venv/bin/ft generate --backend mlx --model ./Qwen1.5-MoE-A2.7B-BF16-Q4Experts --prompt Hello --raw-prompt --max-tokens 32 --profile performance --quiet-cache
+.venv/bin/ft mlx-quantize-experts \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --output ./Qwen1.5-MoE-A2.7B-BF16-Q3UpGate-Q4Down \
+  --bits 3 \
+  --down-bits 4 \
+  --group-size 64
 ```
 
-На тестовой машине M4 16GB стоковый mlx-lm загружал BF16-чекпойнт с заявленным
-пиком 28.63 ГБ, но падал с ошибкой Metal out-of-memory до первого сгенерированного
-токена. Не квантованный BF16 offload-путь FreeToken генерировал со скоростью
-1.88 tok/s. Смешанный чекпойнт BF16-dense/Q4-expert генерировал 32 токена со
-скоростью 4.49 tok/s (медиана трёх процессов) с пиком 7.93 ГБ: примерно в 2.39 раза
-быстрее BF16-пропускной способности FreeToken, тогда как стоковый mlx-lm не мог
-завершить тот же запрос к BF16-модели. Квантизация экспертов меняет числовые
-характеристики модели, поэтому развёртывания должны оценивать качество на своём
-ворклоаде; 4 бита — рекомендуемое значение по умолчанию. Эксперимент с 2 битами
-достиг 6.18 tok/s, но заметно повредил вывод образца одного промпта и не
-рекомендуется. Эти smoke-тесты не являются систематической оценкой качества.
+Quantizer contract:
 
-Precision с учётом проекций также доступна как экспериментальная opt-in опция.
-Например, это сохраняет `down_proj` на Q4, используя Q3 для `gate_proj` и `up_proj`:
+- affine 2/3/4/5/6/8-bit weights;
+- group size 32, 64, or 128;
+- `--bits` applies to `up_proj` and `gate_proj`;
+- `--down-bits` optionally overrides only `down_proj`.
+
+Q3 up/gate + Q4 down reduced routed-expert storage by about 16.7% in the measured checkpoint. It is an opt-in speed/capacity tradeoff, not the default quality setting. Uniform Q4 remains the conservative default until the deployment workload is evaluated.
+
+## Speculative decoding
+
+Speculation is also opt-in. The draft remains resident and reduces the target expert-cache budget.
+
+The measured beneficial pair used a full-Q4 target and compatible Q4 draft:
 
 ```bash
-.venv/bin/ft mlx-quantize-experts --model Qwen/Qwen1.5-MoE-A2.7B --output ./Qwen1.5-MoE-A2.7B-BF16-Q3UpGate-Q4Down --bits 3 --down-bits 4 --group-size 64
-.venv/bin/ft generate --backend mlx --model ./Qwen1.5-MoE-A2.7B-BF16-Q3UpGate-Q4Down --prompt Hello --raw-prompt --max-tokens 128 --profile performance --quiet-cache
+.venv/bin/ft generate \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --draft-model mlx-community/Qwen1.5-0.5B-4bit \
+  --num-draft-tokens 2 \
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 64 \
+  --profile performance \
+  --residency offload \
+  --quiet-cache
 ```
 
-В фиксированном по давлению, равном по памяти, чередующемся A/B на 128 токенов
-этот лейаут использовал 1 015 слотов кэша вместо 864 у равномерного Q4, снизил
-промахи с 3 489 до 2 822 и улучшил парное среднее с 17.52 до 15.77 секунды
-(7.31 → 8.12 tok/s, около 11.1%). Оба варианта имели пик около 8.03 ГБ. При обоих
-лейаутах, принудительно ограниченных 864 слотами на 64 токенах, он всё равно был
-примерно на 3.4% быстрее и использовал примерно на 0.62 ГБ меньше пиковой памяти.
+In the recorded 64-token A/B, this reduced mean time from 12.77 s to 11.45 s, with 57.8% of output tokens accepted from the draft. An 8-token request was slower. A BF16-target speculative run also regressed: 54.84 s for 64 tokens, cache shrink, and slower completion than ordinary BF16 decode. Re-benchmark the exact target, draft, prompt length, and memory envelope before enabling speculation.
 
-Это трейдофф скорости и качества, а не новое значение по умолчанию. На небольшой
-сконструированной проверке teacher-forced на 135 токенов BF16, равномерный Q4,
-Q3-up/gate-Q4-down и равномерный Q3 имели NLL 2.618, 2.707, 2.725 и 2.865
-соответственно. Смешанный лейаут оставался гораздо ближе к Q4, чем равномерный Q3,
-но этот прокси не является широкой оценкой точности. Равномерный Q4 остаётся
-рекомендуемым значением по умолчанию, пока целевой ворклоад не будет оценён.
-Метаданные проекций — расширение чекпойнта FreeToken; обычный mlx-lm не загружает
-этот формат «только эксперты».
+The runtime rejects draft/tokenizer pairs with different vocabularies or special-token IDs. The report counts an accepted draft token only when `generation_tokens` advances, so the final summary response emitted by `mlx-lm` is not counted twice.
 
-## Связь с апстримом FreeToken
+## Runtime controls
 
-Этот репозиторий отслеживает официальное дерево исходников FreeToken и несёт
-MLX-бэкенд напрямую в `python/freetoken/`. FreeToken-MLX остаётся независимым,
-чтобы Apple-специфичные эксперименты могли двигаться быстро, не требуя от
-апстрима поддержки неподдерживаемой платформы. Нейтральные к бэкендам идеи,
-измерения и небольшие переиспользуемые изменения передаются апстриму, когда это
-полезно.
+| Flag | Purpose |
+| --- | --- |
+| `--residency` | `auto`, `resident`, or `offload` |
+| `--memory-limit-gb` | MLX working-set ceiling |
+| `--system-headroom-gb` | memory reserved for macOS and other processes |
+| `--expert-cache-budget-gb` | explicit expert-cache byte cap for experiments |
+| `--allocator-cache-mb` | MLX free-buffer cache ceiling |
+| `--moe-cache-size` | requested expert entries before byte-budget clamping |
+| `--cache-policy` | `auto`, `lru`, or `slru` |
+| `--profile` | `stable` or measured `performance` preset |
+| `--max-kv-size` | rotating KV length for non-speculative generation; preserves four prefix tokens |
+| `--kv-bits` | quantize ordinary KV cache to 4 or 8 bits after the selected start offset |
+| `--kv-group-size` | KV quantization group size: 32, 64, or 128 |
+| `--quantized-kv-start` | token offset at which KV quantization begins |
+| `--prefill-step-size` | prompt tokens processed per prefill chunk |
 
-FreeToken, его статья, брендинг и оригинальная реализация принадлежат проекту
-FlashML и его контрибьюторам. Дополнения FreeToken-MLX сосредоточены на бэкенде
-Apple Silicon, адаптивной резидентности, квантизации только экспертов в MLX,
-бюджетировании памяти и воспроизводимых MLX-экспериментах.
+`--profile performance` currently forces the safe cache size and graph evaluation every eight MoE layers. It therefore overrides an explicit `--eval-interval`. To isolate evaluation cadence, use `--profile stable`, set `--eval-interval` explicitly, and opt into any other fast paths you need with their individual flags.
 
-## Цитирование
+The performance preset also enables lazy single-token expert materialization, BF16 top-4 grouped GEMV, shared-expert/cache-miss overlap, and SLRU for quantized experts. These are hardware- and version-sensitive measurements, not universal defaults.
 
-Если вы используете FreeToken или этот исследовательский форк, пожалуйста,
-цитируйте апстримную [статью FreeToken](https://arxiv.org/abs/2608.16157):
+### Long-context and prefill controls
 
-```bibtex
-@article{yang2026freetoken,
-  title={FreeToken: Efficient Edge-Native MoE Serving with Bandwidth-Adaptive Execution},
-  author={Yang, Shuo and Fan, Xiaoze and Pan, Melissa and Xi, Haocheng and Wang, Zhe and Sun, Shanlin and Keutzer, Kurt and Han, Song and Zaharia, Matei and Xu, Chenfeng and Stoica, Ion},
-  journal={arXiv preprint arXiv:2608.16157},
-  year={2026}
-}
+Bound a non-speculative KV cache while keeping the first four tokens:
+
+```bash
+.venv/bin/ft generate \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --prompt '<long prompt>' \
+  --max-tokens 128 \
+  --max-kv-size 4096 \
+  --prefill-step-size 1024
 ```
 
-## Благодарности
+Quantize the ordinary growing KV cache instead:
 
-FreeToken-MLX построен напрямую на
-[FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken) и благодарит
-его авторов и контрибьюторов. Апстримный FreeToken глубоко вдохновлён
-[mini-sglang](https://github.com/sgl-project/mini-sglang), а также учился у
-следующих проектов и переиспользовал их код:
-[SGLang](https://github.com/sgl-project/sglang),
-[vLLM](https://github.com/vllm-project/vllm),
-[FlashInfer](https://github.com/flashinfer-ai/flashinfer),
-[flash-linear-attention](https://github.com/fla-org/flash-linear-attention),
-[LightLLM](https://github.com/ModelTC/lightllm) и [llama.cpp](https://github.com/ggml-org/llama.cpp).
+```bash
+.venv/bin/ft generate \
+  --backend mlx \
+  --model mlx-community/Qwen1.5-MoE-A2.7B-4bit \
+  --prompt '<long prompt>' \
+  --max-tokens 128 \
+  --kv-bits 4 \
+  --kv-group-size 64 \
+  --quantized-kv-start 4096 \
+  --prefill-step-size 1024
+```
 
-## Лицензия
+Compatibility rules are enforced before model loading:
 
-[Apache License 2.0](LICENSE). Брендинг FreeToken и материалы апстрим-проекта
-остаются атрибутируемыми FlashML и контрибьюторам FreeToken.
+- `--max-kv-size` is unavailable with `--draft-model` in `mlx-lm 0.31`;
+- `--max-kv-size` cannot be combined with `--kv-bits`, because `mlx-lm 0.31` does not implement quantization for `RotatingKVCache`;
+- the rotating limit must exceed the four retained prefix tokens;
+- KV quantization changes numerical behavior and must be evaluated on the deployment workload;
+- persistent prompt-cache load/save is still not exposed by this CLI.
+
+The final runtime JSON now records the requested KV/prefill controls, a hash and token count for the fully rendered prompt, prompt and decode rates reported by `mlx-lm`, derived prompt/decode durations, finish reason, and `time_to_first_output_seconds`. That first-output timer begins immediately before `stream_generate`; it does not include model download or model loading.
+
+## Reproducible run bundles
+
+Use `ft mlx-capture` instead of hand-assembling benchmark files. It runs exactly one MLX generation in a fresh subprocess and atomically publishes a directory containing:
+
+- `stdout.log` — generated bytes followed by the runtime JSON;
+- `stderr.log` — residency/cache events and diagnostics;
+- `capture.json` — command, status, timings, host/package/git metadata, exact file hashes, and the parsed runtime record.
+
+```bash
+.venv/bin/ft mlx-capture \
+  --output runs/A/run-1 \
+  --label baseline \
+  --timeout-seconds 1800 \
+  -- \
+  --backend mlx \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 128 \
+  --profile performance \
+  --residency offload \
+  --memory-limit-gb 10 \
+  --system-headroom-gb 3.2 \
+  --expert-cache-budget-gb 4 \
+  --quiet-cache
+```
+
+The output path must not exist, including as a broken symlink. Successful runs are accepted only when the final stdout line is a valid MLX runtime report. Failed, timed-out, invalid-report, and launch-error attempts still preserve their bundle with a structured status.
+
+Prompt text is redacted from `capture.json` by default; its UTF-8 size and SHA-256 remain for reproducibility. `--include-prompt` is an explicit privacy tradeoff. The raw stdout/stderr files are never rewritten or newline-normalized.
+
+## Benchmark gates
+
+Compare the captured `stdout.log` files:
+
+```bash
+.venv/bin/ft mlx-compare \
+  --baseline runs/A/*/stdout.log \
+  --candidate runs/B/*/stdout.log \
+  --expected-tokens 128 \
+  --min-runs-per-group 3 \
+  --require-balanced-groups \
+  --min-throughput-ratio 0.97 \
+  --max-peak-memory-ratio 1.05 \
+  --max-cache-miss-ratio 1.05 \
+  --require-output-match \
+  --require-same-residency \
+  --write-summary runs/comparison.json
+```
+
+The comparator requires the exact generated-token count, uses complete metric samples, hashes generated output as raw bytes, compares median wall throughput and peak memory, optionally gates cache misses, and returns stable process exit codes. It rejects duplicate JSON keys, non-finite constants, counters outside the signed 64-bit range, duplicate input logs, and malformed or oversized reports.
+
+For close results, add `--max-throughput-relative-mad <ratio>` to reject noisy groups. The summary schema includes raw run records, source-log/report hashes, medians, dispersion, ratios, thresholds, and explicit violations. Full Apple-Silicon procedures are in [`tests/MLX.md`](tests/MLX.md).
+
+## Architecture
+
+1. The residency selector reads checkpoint metadata and evaluates the MLX working set, physical headroom, and current macOS memory pressure.
+2. The loader stores expert tensors as `(shard path, tensor key)` references; dense weights load normally.
+3. On a miss, only one routed expert's `up_proj`, `gate_proj`, and `down_proj` are materialized.
+4. `MLXOffloadMoeCache` shares capacity across layers and records hits, misses, loads, and evictions.
+5. Decode monitors active plus allocator-cache memory. Above 85% of the configured limit, it shrinks the expert cache and clears the MLX allocator cache.
+6. `mlx_generate.py` layers supported generation controls and versioned prompt/decode metrics over the same resident/offload backend without changing routing or Metal expert compute.
+
+The final report includes residency decisions, safety budgets, elapsed time, prompt/decode metrics, KV settings, memory, expert/shard cache counters, fast-path state, speculative acceptance, and optional expert-path timing. Cache events go to stderr and can be disabled with `--quiet-cache`.
+
+## Tests
+
+Generic CI covers the torch-free MLX control plane on Python 3.10 and 3.13: source compilation, CLI dispatch, generation-option forwarding, LRU/SLRU semantics, run capture, and benchmark comparison.
+
+On Apple Silicon:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_mlx_backend.py \
+  tests/test_mlx_cache.py \
+  tests/test_mlx_cli.py \
+  tests/test_mlx_generate.py \
+  tests/test_mlx_capture.py \
+  tests/test_mlx_compare.py \
+  tests/test_mlx_quantize_experts.py \
+  -q
+```
+
+Real-checkpoint MLX generation is not yet automated in repository CI. Follow [`tests/MLX.md`](tests/MLX.md) for the smoke, resident/offload correctness, A/B, long-context/KV, and memory-pressure procedures.
+
+## Known limitations
+
+- one MLX model family and batch size 1;
+- local generation only; the upstream OpenAI/Anthropic server path is not wired to MLX;
+- route admission crosses a Metal→CPU synchronization boundary for every MoE layer;
+- cache misses still depend on safetensors and filesystem page locality;
+- persistent prompt-cache load/save is not exposed yet;
+- rotating KV cannot be combined with speculation or KV quantization under `mlx-lm 0.31`;
+- no Apple-Silicon CI runner or automated real-checkpoint performance gate;
+- no MLX tensor-parallel path;
+- the grouped BF16 GEMV reads an installed private MLX kernel template and is version-sensitive;
+- package/release metadata still mixes this backend with the inherited CUDA distribution.
+
+## Next work
+
+1. separate MLX package/release identity from inherited CUDA publication;
+2. add a pinned Apple-Silicon CI and benchmark runner;
+3. add persistent prompt-cache load/save and real-checkpoint quality/performance validation for the new KV/prefill controls;
+4. record route traces and miss latency, then simulate policies offline;
+5. repack experts contiguously around `(layer, expert)` miss service;
+6. test predictors that improve on the failed previous-token prefetch baseline;
+7. evaluate `mx.compile()` only on stable subgraphs;
+8. prototype device-side resident/miss lookup;
+9. consider multi-Mac/JACCL only after single-node I/O and synchronization stop dominating.
+
+## Layout
+
+```text
+python/freetoken/mlx_backend.py           model loading, routing, offload, generation core
+python/freetoken/mlx_generate.py          KV/prefill controls and prompt/decode metrics
+python/freetoken/mlx_cache.py             Apple-Silicon expert cache
+python/freetoken/mlx_quantize_experts.py  expert-only checkpoint conversion
+python/freetoken/mlx_capture.py           atomic run bundles and provenance metadata
+python/freetoken/mlx_compare.py           strict captured-run parser and benchmark gates
+tests/test_mlx_*.py                       MLX unit and behavior tests
+tests/MLX.md                              real-checkpoint validation procedure
+docs/MLX_PERFORMANCE_TUNING_GUIDE.md      evidence, failures, and experiment queue
+paper/                                    research write-up and raw measurements
+```
+
+## License
+
+Apache-2.0. Upstream attribution and fork status are preserved in the repository history and license files.

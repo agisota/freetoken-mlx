@@ -10,15 +10,17 @@ def _print_help(file: TextIO) -> None:
         """usage: ft <command> [args]
 
 Commands:
-  generate    Generate locally (minimal MLX backend on Apple Silicon)
-  mlx-quantize-experts  Quantize only routed MLX experts; keep dense weights intact
-  serve       Start the FreeToken API server
-  shell       Chat with a FreeToken server in the terminal
-  ctl         Query and manage a running FreeToken server
-  daemon      Run the FreeToken supervisor (persistent engine service)
-  launch      Configure and launch an agent against a FreeToken server
-  checkpoint  Convert an HF safetensors checkpoint to FTW
-  bench       Run a micro-benchmark (e.g. "bench bw" = CPU vs PCIe bandwidth)
+  generate               Generate locally (minimal MLX backend on Apple Silicon)
+  mlx-quantize-experts   Quantize routed MLX experts; keep dense weights intact
+  mlx-capture            Capture one MLX run as a reproducible artifact bundle
+  mlx-compare            Compare captured MLX runs and enforce benchmark gates
+  serve                  Start the FreeToken API server
+  shell                  Chat with a FreeToken server in the terminal
+  ctl                    Query and manage a running FreeToken server
+  daemon                 Run the FreeToken supervisor (persistent engine service)
+  launch                 Configure and launch an agent against a FreeToken server
+  checkpoint             Convert an HF safetensors checkpoint to FTW
+  bench                  Run a micro-benchmark (e.g. "bench bw" = CPU vs PCIe bandwidth)
 
 Use "ft <command> --help" for command-specific options.
 Use "ft --version" to print the FreeToken version.""",
@@ -34,8 +36,8 @@ def _run_serve(argv: list[str]) -> int:
 
 
 def _run_generate(argv: list[str]) -> int:
-    # Keep this lazy: the MLX command must not import torch/flashlib/CUDA.
-    from freetoken.mlx_backend import main
+    # Keep this lazy: parser/help and control-plane tests stay torch/MLX-free.
+    from freetoken.mlx_generate import main
 
     return main(argv)
 
@@ -44,6 +46,20 @@ def _run_mlx_quantize_experts(argv: list[str]) -> int:
     from freetoken.mlx_quantize_experts import main
 
     return main(argv, prog="ft mlx-quantize-experts")
+
+
+def _run_mlx_capture(argv: list[str]) -> int:
+    # Pure stdlib: orchestration and evidence capture do not import MLX/CUDA.
+    from freetoken.mlx_capture import main
+
+    return main(argv, prog="ft mlx-capture")
+
+
+def _run_mlx_compare(argv: list[str]) -> int:
+    # Pure stdlib: usable on CI hosts that do not have MLX or CUDA installed.
+    from freetoken.mlx_compare import main
+
+    return main(argv, prog="ft mlx-compare")
 
 
 def _run_shell(argv: list[str]) -> int:
@@ -108,6 +124,8 @@ def _run_bench(argv: list[str]) -> int:
 COMMANDS = {
     "generate": "_run_generate",
     "mlx-quantize-experts": "_run_mlx_quantize_experts",
+    "mlx-capture": "_run_mlx_capture",
+    "mlx-compare": "_run_mlx_compare",
     "serve": "_run_serve",
     "shell": "_run_shell",
     "ctl": "_run_ctl",

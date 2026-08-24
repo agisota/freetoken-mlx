@@ -1,249 +1,433 @@
-# Руководство по тюнингу производительности и отказам FreeToken-MLX
+# MLX performance tuning
 
-Этот документ сводит полезные результаты оптимизации Qwen1.5-MoE-A2.7B
-на Apple M4 с 16GB объединённой памяти при batch size 1. В нём зафиксированы
-и принятые изменения, и неудачные эксперименты, чтобы последующая работа
-отталкивалась от фактов, а не повторяла привлекательные, но непродуктивные идеи.
+This document records what improved FreeToken-MLX on Apple Silicon, what failed, and how to test the next change without fooling yourself.
 
-## Главный вывод
+Reference setup: `Qwen/Qwen1.5-MoE-A2.7B`, batch size 1, Apple M4 with 16 GB unified memory. Every number is configuration-specific.
 
-Когда чекпоинт безопасно помещается в память, нативный резидентный `mlx-lm`
-остаётся самым быстрым путём. Ценность FreeToken — во второй ветке:
-ограниченный offload экспертов позволяет запустить 28.6GB BF16 MoE-чекпоинт там,
-где резидентный MLX падает с OOM.
+## Bottom line
 
-Для строгого BF16 offload доминирующая стоимость — перемещение и чтение
-выбранных весов экспертов, а не Python-диспетчеризация или арифметическая
-пропускная способность. Работа ядра может выглядеть драматически быстрее в
-изоляции и при этом почти не двигать сквозную скорость. Крупные выигрыши требуют
-сокращения числа читаемых байт — поэтому BF16-dense/Q4-experts — самый
-правдоподобный быстрый путь offload.
+Use native `mlx-lm` when the whole model fits safely.
 
-## Бенчмаркьте правильно или не оптимизируйте вовсе
+FreeToken-MLX matters when it does not. In that regime, expert-state movement usually dominates: checkpoint bytes, page locality, cache misses, and the synchronization required before Python can admit an expert. One faster GEMV does not fix those costs.
 
-Используйте контролируемую матрицу для каждого утверждения:
+Optimization order:
 
-- Один и тот же чекпоинт, промпт, режим токенизатора, batch size, число
-  сгенерированных токенов, ёмкость кэша, лимит MLX, системный резерв и топология процессов.
-- Используйте свежие процессы и чередуйте порядок A/B (`old,new,new,old`), чтобы
-  снизить смещение от файлового page-cache и термических эффектов.
-- Предпочитайте медианы или парные средние; никогда не продвигайте единственный лучший прогон.
-- Записывайте сгенерированный текст, затраченное время, пиковую/активную/кэш-память,
-  счётчики попаданий/промахов/вытеснений экспертов, открытия шардов и спекулятивное принятие.
-- Фиксируйте бюджет expert-кэша при сравнении вычислительных реализаций. Иначе
-  текущее давление macOS меняет ёмкость кэша между прогонами.
-- Тестируйте и короткий интерактивный вывод, и более длинное декодирование.
-  Политика может быть нейтральной на 32 токенах и полезной на 128 — или наоборот.
-- Обращайтесь с `route_sync_ms` осторожно: `indices.tolist()` — граница
-  синхронизации, поэтому этот таймер включает ожидающую завершения вышестоящую
-  работу Metal. Это не доказательство того, что само преобразование Python-списка медленно.
-- Требуйте неизменного вывода для оптимизаций точного пути. Если порядок редукции
-  меняется, сообщайте численный допуск и перезапускайте генерацию: крошечные
-  изменения логитов могут изменить будущую маршрутизацию и обесценить сравнения кэшей.
+1. reduce expert bytes;
+2. reduce misses;
+3. reduce miss service and page-in amplification;
+4. overlap independent work;
+5. remove or amortize Metal→CPU synchronization;
+6. optimize a kernel only after profiling shows it dominates.
 
-Рекомендуемый защитный конверт на Mac с 16GB:
+## Benchmark contract
+
+A comparison is invalid unless these are fixed:
+
+- checkpoint revision and quantization layout;
+- rendered prompt and chat-template mode;
+- exact generated-token count;
+- batch size and sampling behavior;
+- residency path;
+- MLX memory limit and macOS headroom;
+- expert-cache byte budget, capacity, policy, and shard-cache size;
+- profile and individual fast-path switches;
+- draft model and proposed draft-token count;
+- KV mode, quantization, and prefill chunk size;
+- Python, macOS, MLX, and mlx-lm versions.
+
+Use fresh processes and alternate order (`A,B,B,A`). Keep every raw run. Report medians or paired summaries, never the best sample.
+
+`--max-tokens 32` is not proof of a 32-token run: mlx-lm stops at EOS. The final report must contain `generated_tokens: 32`, or the run must be discarded. `ft mlx-compare --expected-tokens 32` enforces that rule.
+
+Recommended 16 GB capture:
 
 ```bash
-.venv/bin/ft generate \
+.venv/bin/ft mlx-capture \
+  --output runs/A/run-1 \
+  --label baseline \
+  --timeout-seconds 1800 \
+  -- \
   --backend mlx \
   --model Qwen/Qwen1.5-MoE-A2.7B \
-  --prompt Hello --raw-prompt --max-tokens 32 \
-  --profile performance --residency offload \
-  --memory-limit-gb 10 --system-headroom-gb 3.2 \
-  --quiet-cache --detailed-timing
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 32 \
+  --profile performance \
+  --residency offload \
+  --memory-limit-gb 10 \
+  --system-headroom-gb 3.2 \
+  --expert-cache-budget-gb 4 \
+  --quiet-cache \
+  --detailed-timing
 ```
 
-Потолок MLX в 10GB — не единственная защита. Решение о резидентности должно
-также вычесть dense/runtime-веса, опциональную draft-модель, запрошенный
-системный резерв и текущее давление памяти macOS до определения размера expert-кэша.
+Run at least:
 
-## Изменения, которые заслужили своё место
+- exact 32-token decode;
+- exact 128-token decode;
+- a prompt-heavy case;
+- a pressure case near the intended memory ceiling.
 
-### Держите нативный MLX, когда резидентность безопасна
+A policy that helps at 128 tokens can be neutral or harmful at 32.
 
-Offload всегда добавляет издержки кэширования и синхронизации. Гибридный селектор
-оставляет нативный MLX для помещающихся чекпоинтов и выбирает FreeToken offload,
-только когда резидентная оценка или текущее давление предсказывают OOM. Это
-избегает превращения фичи ёмкости в универсальное замедление.
+## Machine-readable gate
 
-### Ограничивайте ленивые графы, но не синхронизируйте каждую операцию
+```bash
+.venv/bin/ft mlx-compare \
+  --baseline runs/A/*/stdout.log \
+  --candidate runs/B/*/stdout.log \
+  --expected-tokens 128 \
+  --min-runs-per-group 3 \
+  --require-balanced-groups \
+  --min-throughput-ratio 0.97 \
+  --max-peak-memory-ratio 1.05 \
+  --max-cache-miss-ratio 1.05 \
+  --require-output-match \
+  --require-same-residency \
+  --write-summary runs/comparison.json
+```
 
-Отложенное вычисление экспертов с оценкой каждые восемь MoE-слоёв улучшило
-BF16 performance-профиль примерно с 1.43 до 1.88 tok/s, сохраняя граф ограниченным.
-Неограниченный ленивый граф на 24 слоя удерживает вытесненные веса до оценки
-логитов и может упасть с OOM; оценка каждого слоя оставляет производительность
-на столе.
+The comparator:
 
-### Перекрывайте независимую работу shared-expert
+- parses only the last non-empty stdout line as strict runtime JSON;
+- treats preceding stdout as raw generated bytes and hashes it without newline normalization;
+- rejects duplicate JSON keys, non-finite constants, oversized reports, duplicate inputs, and incomplete metric samples;
+- rejects EOS-shortened runs;
+- enforces optional minimum/balanced sample counts and throughput-noise limits;
+- compares median wall throughput, peak memory, and optionally cache misses;
+- emits explicit violations and exits `0`/`1`/`2` for pass/gate failure/input failure.
 
-После завершения синхронизации маршрутизации shared expert независим от
-пополнения кэша. Отправка его до поиска в safetensors дала небольшой,
-повторяемый выигрыш. Сохраните выключатель: эффективность перекрытия зависит
-от планировщика MLX и нагрузки.
+See [`../tests/MLX.md`](../tests/MLX.md) for the complete capture and validation procedure.
 
-### Удерживайте разобранные отображения квантованных шардов
+## Metrics to retain
 
-Аффинные Q4-эксперты имеют упакованные веса, масштабы и смещения. Повторный разбор
-отображений шардов доминировал в пополнении кэша, хотя удержание вычисленных
-весов экспертов нарушало бы eviction. Полезный компромисс:
+Every run should preserve:
 
-- удерживать до восьми разобранных отображений для квантованных чекпоинтов;
-- немедленно удалять каждый потреблённый массив эксперта из его отображения;
-- сохранить консервативный дефолт в один шард для чистого BF16.
+- wall time and exact generated tokens;
+- generated bytes and output hash;
+- runtime-report schema version;
+- fully rendered prompt hash, bytes, tokens, reported prefill rate, and derived prefill time;
+- first-output latency, decode rate, derived decode time, and finish reason;
+- requested KV mode, bits, group size, quantization start, and prefill step size;
+- MLX active, allocator-cache, and peak memory;
+- expert-cache hits, misses, loads, evictions, resident entries, and capacity;
+- shard-cache opens and hits;
+- residency decision and every memory budget;
+- speculative accepted-token count and fraction;
+- route/ensure/eval timing when enabled;
+- machine, OS, Python, MLX, and mlx-lm versions;
+- checkpoint/config fingerprint;
+- exact stdout/stderr/report hashes;
+- order, cooldown, and thermal notes for close comparisons.
 
-При фиксированном кэше на 600 экспертов это изменило декодирование full-Q4
-примерно с 3.6 до 5.0 tok/s, а смешанное BF16-dense/Q4-expert — с 3.20 до 4.42 tok/s.
-Время разбора шардов упало примерно с 2.4 секунды до 0.24 секунды.
+`route_sync_ms` is not a pure Python timer. `indices.tolist()` is a Metal→CPU synchronization point, so it can absorb unfinished upstream Metal work.
 
-### Распределяйте точность экспертов по проекциям
+## Changes that earned their place
 
-Однородный Q4 остаётся дефолтом «качество прежде всего», но формат банка теперь
-допускает переопределение по проекциям. Q3 для `gate_proj` и `up_proj` при
-сохранении Q4 для `down_proj` сократил хранение routed-экспертов примерно на 16.7%.
-При том же фиксированном безопасном бюджете памяти меньшие строки увеличили
-ёмкость кэша с 864 до 1,015 экспертов. Чередующийся A/B на 128 токенов показал:
+### Native residency when safe
 
-- однородный Q4: среднее 17.52 секунды, 3,489 промахов, пик около 8.02GB;
-- Q3-up/gate-Q4-down: среднее 15.77 секунды, 2,822 промаха, пик около 8.03GB;
-- улучшение пропускной способности: около 11.1%.
+Offload is a capacity mechanism. The selector should keep native `mlx-lm` for checkpoints that fit the MLX working set, physical headroom, and current pressure budget.
 
-При фиксированных 864 слотах на 64 токенах layout со смешанными проекциями
-остался примерно на 3.4% быстрее и снизил пиковую память примерно на 0.62GB,
-разделив стоимость упакованных весов от выгоды дополнительного кэша. Небольшой
-teacher-forced прокси на 135 токенов дал NLL 2.618 для BF16, 2.707 для однородного
-Q4, 2.725 для смеси проекций и 2.865 для однородного Q3. Это аргумент за
-opt-in компромисс, недостаточный для замены Q4 по умолчанию. Проверяйте качество
-на корпусе развёртывания.
+### Bounded lazy evaluation
 
-Загрузчик сверяет метаданные проекций с формами упакованных тензоров до
-определения размера кэша. Бюджетирование использует реальную упаковку строк uint32
-и аффинные метаданные, а не дробную битовую оценку, поэтому некорректные смешанные
-чекпоинты не могут молча переподелить объединённую память.
+Evaluating every MoE layer leaves graph performance unused. Deferring all 24 layers keeps evicted arrays alive through graph references and can OOM.
 
-### Защищайте горячие Q4-эксперты только после прогрева
+The measured compromise is evaluation every eight MoE layers. In the reference BF16 run, the performance preset moved decode from about 1.43 to 1.88 tok/s while keeping memory bounded.
 
-Адаптивный сегментированный LRU держит небольшой защищённый сегмент при коротком
-выводе, затем растит его после четырёх окон запросов размером с кэш. При кэше
-на 864 экспертов:
+Current implementation caveat: `--profile performance` forces `eval_interval=8` and ignores an explicit `--eval-interval`. For a cadence A/B, use `--profile stable`, set the interval explicitly, and enable any other fast paths independently.
 
-- промахи на 32 токена изменились всего на один против LRU;
-- промахи на 128 токенов упали с 3,801 до 3,489 (8.2%);
-- пропускная способность выросла примерно на 4% при неизменном пике 8.02GB.
+### Shared-expert overlap
 
-Эта политика автоматична только для квантованных экспертов в performance-профиле.
-Stable-режим и чистый BF16 сохраняют обычный LRU.
+After routing indices are available, the shared expert is independent of CPU-side cache admission. Scheduling it before safetensors materialization produced a small repeatable gain.
 
-### Тратьте действительно свободную безопасную память на BF16-кэш
+Keep the switch. MLX scheduling can change between releases.
 
-Старый BF16 performance-бюджет использовал лишь 20% безопасного рабочего набора,
-оставляя несколько GiB простоя при повторной подгрузке экспертов из чекпоинта.
-Повышение доли performance-профиля до 50%, по-прежнему ограниченной всеми
-защитными резервами, увеличило кэш при фиксированном давлении со 121 до 304 экспертов:
+### Retained quantized shard mappings
 
-- промахи на 32 токена: 2,353 → 1,949;
-- промахи на 128 токенов: 9,672 → 8,183;
-- время на 128 токенов: 64.59 → 62.33 секунды, примерно на 3.6% быстрее;
-- пиковая память MLX: 5.86GB → 9.03GB при лимите 10GB.
+Quantized experts contain packed weights plus scale and bias metadata. Reopening and reparsing mappings on each miss was expensive.
 
-Под реальным меняющимся давлением тот же прогон выбрал 273 слота, достиг пика
-8.49GB, завершился нормально и оставил систему на 68% свободной памяти после выхода.
-Stable-режим остаётся на 20%.
+The useful policy:
 
-## Привлекательные эксперименты, которые провалились
+- retain up to eight mappings for quantized checkpoints;
+- remove each consumed expert array from the mapping so expert-cache eviction can release it;
+- retain only one mapping by default for BF16.
 
-### «Более быстрое ядро» не означало более быстрый инференс
+At a fixed 600-expert cache, recorded full-Q4 decode moved from about 3.6 to 5.0 tok/s; mixed BF16-dense/Q4-expert moved from about 3.20 to 4.42 tok/s. Shard parse time fell from about 2.4 s to 0.24 s.
 
-Изменение раскладки потоков группированного BF16 GEMV улучшило изолированное ядро
-реального эксперта с 1.534ms до 1.243ms (19%). Сквозная генерация улучшилась лишь
-примерно на 1%, а раскладки с другим порядком редукции меняли генерацию. Раскладка,
-сохранявшая точный вывод, не дала сквозного выигрыша. Ядро не было доминирующим
-компонентом wall-clock, поэтому эксперимент удалили.
+### Expert-only quantization
 
-Правило: оценивайте долю ядра в общем времени выполнения до его оптимизации.
-Даже идеальное ядро не может превысить запас по закону Амдала.
+Reducing bytes produced the largest offload gain.
 
-### Складывание Q4-весов для батчинга нативных квантованных matmul дало регрессию
+Mixed BF16-dense/Q4-expert reached 4.49 tok/s at 7.93 GB peak in the reference run, versus 1.88 tok/s for BF16 offload at 5.83 GB.
 
-Объединение top-4 проекций сократило число диспетчеризаций, но требовало складывания
-упакованных весов, масштабов и смещений на каждом токене. Лишние копии сделали путь
-примерно на 2.7% медленнее и увеличили использование allocator-cache. Меньше вызовов
-бесполезно, когда они добавляют столь же большой проход по памяти.
+This is the expected mechanism: cheaper misses and more resident experts under the same byte budget.
 
-### Кастомное группированное Q4 Metal-ядро не стоило поставки
+### Projection-aware precision
 
-Изолированный эксперимент был максимум примерно на 1.9% быстрее и дал регрессию
-реального performance-пути примерно на 4%. Его удалили. Будущему ядру нужен кэш,
-чьи слоты уже физически непрерывны; сборка разрозненных экспертов в момент
-диспетчеризации стирает выгоду.
+The current converter exposes one base precision for `up_proj` and `gate_proj`, plus an optional `down_proj` override.
 
-### Удаление масок сократило время построения графа, а не wall time
+Q3 up/gate + Q4 down reduced routed-expert storage by about 16.7% relative to uniform Q4 and increased capacity from 864 to 1,015 experts under the same safe byte budget.
 
-Для декодирования одного токена прямое складывание выходов в порядке маршрутизации
-примерно вдвое сократило Python-side время построения графа. Чередующийся инференс
-с фиксированным бюджетом не показал значимого изменения пропускной способности.
-Оптимизация маленького таймера — не сквозная оптимизация.
+Recorded 128-token A/B:
 
-### Больше разобранных BF16-шардов не помогло
+| Layout | Mean time | Misses | Peak |
+| --- | ---: | ---: | ---: |
+| uniform Q4 | 17.52 s | 3,489 | ~8.02 GB |
+| Q3 up/gate + Q4 down | 15.77 s | 2,822 | ~8.03 GB |
 
-В отличие от Q4, чистый BF16 имеет меньше массивов метаданных на проекцию.
-Удержание большего числа отображений шардов увеличило удержание без измеримого
-улучшения пропускной способности, поэтому BF16 остаётся на одном разобранном шарде.
+At a fixed 864 slots, the mixed layout remained about 3.4% faster and used about 0.62 GB less peak memory.
 
-### Альтернативные политики вытеснения BF16 оказались хуже
+Teacher-forced proxy on 135 tokens:
 
-При 300 слотах сегментированный LRU увеличил промахи на 32 токена с 1,953 до 2,086
-и замедлил инференс примерно на 4%. Офлайн-симуляция также показала преимущество
-global LRU над per-layer LRU и LFU. Не предполагайте, что политика, помогающая Q4,
-поможет и BF16; размер эксперта и геометрия кэша меняют нагрузку.
+| Format | NLL |
+| --- | ---: |
+| BF16 | 2.618 |
+| uniform Q4 | 2.707 |
+| Q3 up/gate + Q4 down | 2.725 |
+| uniform Q3 | 2.865 |
 
-### Prefetch маршрутизации предыдущего токена имел низкую точность
+This supports an opt-in speed/capacity tradeoff. Uniform Q4 remains the conservative default.
 
-Лишь 26.5% экспертов пересекались между соседними токенами на одном слое.
-Prefetch всех четырёх предыдущих экспертов давал около трёх неверных пополнений
-на каждое полезное, загрязняя ограниченный по ёмкости BF16-кэш. Измеряйте
-устойчивость маршрутизации до реализации предсказания.
+### SLRU after warm-up
 
-### Спекулятивное декодирование BF16 вскрыло плохой tradeoff малого prefill
+Pure LRU is vulnerable to scan-like traffic. The current SLRU starts with a small protected segment, then expands it after several cache-sized request windows.
 
-Draft 0.5B Q4 помогает full-Q4 цели, но верификационные чанки BF16-цели в 2–3 токена
-маршрутизируют много уникальных экспертов и расходуют draft-память, которая иначе
-держала бы экспертов цели. Прогон BF16 на 64 токена занял 54.84 секунды, вызвал
-усадку кэша и оказался медленнее обычного декодирования. Пропуск каждого
-верификационного токена через группированный GEMV ещё больше увеличил промахи
-и тоже был удалён.
+At 864 entries:
 
-Спекуляция специфична для нагрузки. Отслеживайте долю принятого вывода, вызовы цели,
-ёмкость кэша после резервирования под draft и эффективность MoE на коротких чанках —
-а не только скорость draft-модели.
+- 32-token misses were effectively unchanged;
+- 128-token misses fell from 3,801 to 3,489;
+- throughput improved by about 4%;
+- peak memory was unchanged.
 
-### Двухбитная квантизация экспертов была быстрой, но портила вывод
+Auto-selection uses SLRU only for quantized experts in the performance profile.
 
-Q2 достиг примерно 6.18 tok/s на smoke-промпте, но заметно ухудшил образец.
-Пропускная способность без оценки качества — невалидная оптимизация. Q4 —
-рекомендуемый дефолт, пока более широкие тесты точности не оправдают другой формат.
+### Safe spare memory for BF16
 
-## Практическое дерево решений
+The old BF16 performance budget left safe memory unused. Raising its cache fraction from 20% to 50%, while preserving every clamp, increased the reference cache from 121 to 304 experts.
 
-1. Если полный чекпоинт безопасно помещается — используйте резидентный нативный MLX.
-2. Если BF16 не помещается, а точность BF16 важна — используйте FreeToken offload
-   с динамическим бюджетированием памяти; ожидайте ёмкость и стабильность,
-   а не многократного ускорения.
-3. Если приемлема квантизация только экспертов — используйте BF16-dense/Q4-experts.
-   Это самый правдоподобный крупный выигрыш offload, потому что сокращает
-   доминирующие байты.
-4. Оптимизируйте метаданные и промахи кэша до написания ядер.
-5. Рассматривайте fused/кастомное ядро только после того, как слоты expert-кэша
-   физически непрерывны, а профилирование доказывает доминирование вычислений или диспетчеризации.
-6. Отвергайте любое изменение, которое выигрывает микробенчмарк, но проигрывает
-   чередующемуся сквозному A/B, меняет вывод без явного исследования качества или
-   расходует запрошенный системный резерв.
+Recorded effect:
 
-## Самая ценная будущая работа
+- 32-token misses: 2,353 → 1,949;
+- 128-token misses: 9,672 → 8,183;
+- 128-token time: 64.59 s → 62.33 s;
+- peak: 5.86 GB → 9.03 GB under a 10 GB MLX limit.
 
-Следующий правдоподобный крупный шаг — packed непрерывный кэш слотов экспертов
-в связке с Metal-примитивом выбранных экспертов, который читает Q4-веса напрямую,
-выполняет де-квантизацию внутри ядра и избегает per-token складывания. Для строгого
-BF16 вероятные будущие выигрыши инкрементальны, поскольку пропускная способность
-памяти/хранилища остаётся жёстким пределом. Многократное улучшение строгого BF16
-на этом железе — не правдоподобная инженерная цель без сокращения байтов,
-изменения резидентности или числового представления модели.
+This is a deliberate memory-for-loads trade, not free speed.
+
+### Full-Q4 speculative decoding on a compatible workload
+
+A compatible Q4 0.5B draft helped the full-Q4 MoE target in the recorded 64-token workload:
+
+- mean time: 12.77 s → 11.45 s;
+- 57.8% of output tokens accepted from the draft;
+- peak memory: 5.71 GB → 6.31 GB.
+
+An 8-token request was slower. Keep speculation opt-in and measure target calls, acceptance, cache capacity after draft reservation, and total wall time.
+
+The extended generation layer also fixes draft accounting: the final summary response emitted by `mlx-lm` repeats the last token count, so acceptance is counted only when `generation_tokens` advances.
+
+### Strict capture and comparison artifacts
+
+`ft mlx-capture` now creates one atomic directory per subprocess run, preserves stdout/stderr unchanged, records host/package/git metadata, redacts prompt text by default, and validates the final runtime report. `ft mlx-compare` consumes those exact logs and enforces evidence size, completeness, balance, output, memory, and throughput gates.
+
+This does not make a noisy benchmark correct by itself. It removes several silent ways to publish incomparable or malformed evidence.
+
+### Supported KV and prefill controls
+
+`ft generate` now exposes upstream `mlx-lm 0.31` controls without changing routing or expert compute:
+
+- `--max-kv-size` for bounded non-speculative rotating KV;
+- `--kv-bits`, `--kv-group-size`, and `--quantized-kv-start` for ordinary KV quantization;
+- `--prefill-step-size` for prompt chunking;
+- versioned prompt/decode metrics and requested-cache settings in the final report.
+
+Compatibility is fail-fast:
+
+- rotating KV is unavailable with a draft model;
+- rotating KV and quantized KV cannot be combined because `RotatingKVCache.to_quantized` is not implemented in the pinned version;
+- the rotating limit must exceed the four retained prefix tokens.
+
+These controls are now testable infrastructure. They are not yet measured defaults for this MoE backend.
+
+## Experiments that failed
+
+### Faster isolated GEMV barely moved end-to-end decode
+
+A thread-layout change improved isolated BF16 expert GEMV from 1.534 ms to 1.243 ms, about 19%.
+
+End-to-end generation moved by about 1%. Some layouts changed reduction order and generated output. The kernel was not the dominant component.
+
+### Packed-Q4 batching regressed
+
+Stacking routed Q4 weights reduced dispatch count but added per-token packing, copying, and shape work. The tested path regressed and used more allocator cache.
+
+A future fused path needs physically contiguous cache slots; dynamic stacking removes the intended benefit.
+
+### Unlimited lazy graphs OOM
+
+A full-model lazy graph keeps references to evicted experts until logits are evaluated. This defeats bounded residency.
+
+Any larger evaluation interval must retain an OOM guard and record peak memory.
+
+### More retained BF16 mappings did not help
+
+BF16 has less quantization metadata per projection. Retaining additional mappings increased retention without a measured throughput gain. The default remains one.
+
+### Alternative BF16 eviction policies were worse
+
+At 300 slots, SLRU increased 32-token misses from 1,953 to 2,086 and slowed inference by about 4%. Offline simulation also favored global LRU over per-layer LRU and LFU for that trace.
+
+Do not transfer a Q4 policy to BF16 without replaying the actual route geometry.
+
+### Previous-token same-layer prefetch was a negative baseline
+
+Only 26.5% of selected experts overlapped between adjacent tokens in the same layer. Prefetching all four prior experts caused roughly three wasted admissions for every useful one and polluted the bounded BF16 cache.
+
+Do not repeat this as the default predictor. Any new prefetch method must beat this measured baseline in useful-prefetch ratio, wasted bytes, miss latency, and end-to-end time.
+
+### BF16-target speculation regressed
+
+A resident Q4 0.5B draft reduced the target expert-cache budget while short BF16 verification chunks routed many unique experts. The recorded 64-token run took 54.84 s, shrank the cache, and finished slower than ordinary BF16 decode.
+
+Speculation must be evaluated per target representation and output length.
+
+### Q2 experts were fast but damaged output
+
+Q2 reached about 6.18 tok/s on a smoke prompt and visibly degraded the sample. Throughput without a quality evaluation is not a valid improvement.
+
+## Current bottlenecks
+
+### 1. Metal→CPU route synchronization
+
+Every MoE layer currently crosses this boundary:
+
+```python
+routed = [int(v) for v in indices.reshape(-1).tolist()]
+```
+
+Python owns expert-cache admission and file materialization, so the route must become host-visible before the miss can be serviced.
+
+Useful experiments:
+
+- maintain a device-side resident bitset and synchronize only miss IDs;
+- batch decisions where graph structure permits;
+- prefetch using a predictor trained on route traces, not naive previous-token reuse;
+- move compact admission state into an MLX/Metal primitive;
+- separate route wait from miss materialization in instrumentation.
+
+Success means lower wall time with identical output and bounded memory. A lower `route_sync_ms` alone is insufficient.
+
+### 2. Checkpoint-oriented storage
+
+A miss resolves `(shard path, tensor key)` for three projections. Cached mappings remove metadata parse cost, but payload access still follows Hugging Face shard locality.
+
+Next experiment:
+
+```text
+(layer, expert) -> contiguous gate + up + down payload
+```
+
+Compare both layouts on the same route trace and quantization. Record bytes read, faults, p50/p95 miss service, TTFT, 32/128-token throughput, disk size, and conversion cost.
+
+### 3. Persistent prompt cache and real long-context evidence remain
+
+Rotating KV, ordinary KV quantization, prefill chunking, rendered-prompt fingerprints, first-output timing, and prompt/decode rates are now exposed. The remaining work is not another flag surface:
+
+- persistent prompt-cache load/save for repeated prefixes;
+- real Apple-Silicon A/B evidence for rotating KV, Q4/Q8 KV, and prefill chunk sizes;
+- quality evaluation for KV quantization;
+- long-context pressure tests that include the MoE expert cache and system headroom;
+- a stable definition of process-level cold TTFT versus generation-level first output.
+
+Important compatibility limits are enforced by the CLI: `max_kv_size` is unavailable under speculation and cannot be combined with KV quantization in `mlx-lm 0.31`.
+
+These controls matter most for agent workloads with repeated system prompts and tool schemas. Persistent prefix reuse is likely more valuable there than another small decode-kernel change.
+
+### 4. Stable subgraph compilation
+
+`mx.compile()` can reduce graph overhead, but dynamic shapes or dtypes can trigger recompilation.
+
+Do not compile cache miss/materialization first. Test stable pieces:
+
+- router softmax/top-k;
+- shared expert;
+- weighted reduction;
+- resident decode step;
+- fixed-shape resident expert compute.
+
+Report cold compile time, compile count, warm throughput, memory, and output.
+
+### 5. Trace-driven prefetch and policy
+
+Create a trace keyed by `(token, layer)` and replay it offline. Evaluate:
+
+- decayed expert frequency per layer;
+- transition tables over complete expert sets;
+- a small Markov predictor;
+- pinned hot sets;
+- one- or two-layer look-ahead where computation permits;
+- Belady's offline upper bound.
+
+Keep previous-token same-layer reuse only as the measured negative baseline: 26.5% overlap and about three wasted admissions per useful one.
+
+Metrics must include wasted bytes and cache pollution, not only hit rate.
+
+### 6. Multi-Mac is not the first fix
+
+MLX distributed collectives make multi-Mac sharding possible. They do not remove local route synchronization or page-ins.
+
+Add network collectives only after a time breakdown shows enough compute or capacity pressure to justify them.
+
+## Experiment queue
+
+| Priority | Experiment | Expected upside | Main risk |
+| --- | --- | --- | --- |
+| P0 | Apple-Silicon CI + pinned benchmark lane | continuous validity | runner cost/noise |
+| P0 | persistent prompt cache + repeated-prefix benchmark | large on agent workloads | cache compatibility/correctness |
+| P0 | real rotating/Q4/Q8-KV and prefill A/B | bounded long-context memory | quality loss or neutral speed |
+| P0 | route trace + miss latency distribution | identifies the real target | instrumentation perturbation |
+| P0 | contiguous expert artifact | lower page-in cost | another format |
+| P1 | trace-based prefetch | hide miss latency | wasted I/O and pollution |
+| P1 | `mx.compile()` stable subgraphs | less graph overhead | recompilation/cold start |
+| P1 | adaptive byte-budget controller | better pressure response | oscillation |
+| P2 | device-side admission prototype | remove sync boundary | implementation complexity |
+| P2 | multi-Mac/JACCL sharding | more capacity | communication overhead |
+
+Package/release identity is a separate P0 repository requirement and should be resolved before publishing MLX artifacts, independent of this performance queue.
+
+## Default-change gate
+
+A performance change should not become default without:
+
+1. exact `mlx-capture` commands;
+2. machine, package, source-commit, and environment metadata;
+3. immutable stdout/stderr/report hashes for every run;
+4. exact generated-token enforcement;
+5. at least three valid balanced runs per group for a default claim;
+6. an A/B summary generated from the raw logs;
+7. output or quality comparison appropriate to the numerical change;
+8. peak-memory and headroom comparison;
+9. throughput-dispersion reporting for close results;
+10. a disable switch for risky fast paths;
+11. an automated threshold, or a precise explanation of why the required Mac lane is still manual.
+
+## Safety
+
+Unified-memory pressure can make macOS unusable before Python receives a clean OOM. Preserve:
+
+- MLX working-set limit;
+- allocator-cache limit;
+- explicit system headroom;
+- live pressure check;
+- dense/runtime and draft reserves;
+- expert-cache byte clamp;
+- monotonic cache shrink under pressure;
+- clean Metal-memory errors.
+
+A 5% gain obtained by taking memory from the operating system is a regression.
+
+## Interpretation
+
+The optimization frontier is expert-state movement and scheduling: bytes per expert, miss frequency, file/page locality, reusable prompt/KV state, and how much miss latency can be hidden before the next token blocks.
+
+That is where the next material end-to-end gain is most likely.
