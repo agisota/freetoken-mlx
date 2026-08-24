@@ -8,12 +8,13 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
 from freetoken.cli import main as cli_main  # noqa: E402
-from freetoken.mlx_capture import capture_run, main  # noqa: E402
+from freetoken.mlx_capture import _source_metadata, capture_run, main  # noqa: E402
 
 
 def _success_script(output: str = "hello") -> str:
@@ -153,6 +154,31 @@ class MLXCaptureTest(unittest.TestCase):
                     ["argument"],
                     command_prefix=[sys.executable, "-c", _success_script()],
                 )
+
+    def test_capture_refuses_broken_symlink_output(self):
+        if not hasattr(Path, "symlink_to"):
+            self.skipTest("symlinks are unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "run"
+            try:
+                output.symlink_to(Path(directory) / "missing-target")
+            except OSError as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            with self.assertRaisesRegex(FileExistsError, "already exists"):
+                capture_run(
+                    output,
+                    ["argument"],
+                    command_prefix=[sys.executable, "-c", _success_script()],
+                )
+
+    def test_source_metadata_distinguishes_clean_git_tree(self):
+        with patch(
+            "freetoken.mlx_capture._run_git",
+            side_effect=("a" * 40, ""),
+        ):
+            metadata = _source_metadata()
+        self.assertEqual(metadata["git_commit"], "a" * 40)
+        self.assertFalse(metadata["git_dirty"])
 
     def test_default_command_requires_explicit_mlx_backend(self):
         with tempfile.TemporaryDirectory() as directory:
