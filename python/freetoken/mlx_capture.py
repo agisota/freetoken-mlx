@@ -23,6 +23,8 @@ from typing import Mapping, Sequence
 from freetoken.mlx_compare import load_run
 
 CAPTURE_SCHEMA_VERSION = 1
+_PROMPT_OPTION = "--prompt"
+_MIN_UNAMBIGUOUS_PROMPT_OPTION = "--prom"
 _SAFE_ENVIRONMENT_KEYS = (
     "HF_HUB_DISABLE_TELEMETRY",
     "HF_HUB_OFFLINE",
@@ -142,6 +144,15 @@ def _prompt_record(value: str) -> dict[str, object]:
     }
 
 
+def _is_prompt_option(option: str) -> bool:
+    """Match the canonical prompt flag and its unique argparse abbreviations."""
+
+    return (
+        len(option) >= len(_MIN_UNAMBIGUOUS_PROMPT_OPTION)
+        and _PROMPT_OPTION.startswith(option)
+    )
+
+
 def _redact_generate_args(
     generate_args: Sequence[str],
     *,
@@ -152,17 +163,19 @@ def _redact_generate_args(
     index = 0
     while index < len(generate_args):
         arg = generate_args[index]
-        if arg == "--prompt" and index + 1 < len(generate_args):
+        option, separator, inline_value = arg.partition("=")
+        if separator and _is_prompt_option(option):
+            prompt = _prompt_record(inline_value)
+            redacted.append(
+                arg if include_prompt else f"{option}=<redacted>"
+            )
+            index += 1
+            continue
+        if _is_prompt_option(arg) and index + 1 < len(generate_args):
             value = generate_args[index + 1]
             prompt = _prompt_record(value)
             redacted.extend((arg, value if include_prompt else "<redacted>"))
             index += 2
-            continue
-        if arg.startswith("--prompt="):
-            value = arg.split("=", 1)[1]
-            prompt = _prompt_record(value)
-            redacted.append(arg if include_prompt else "--prompt=<redacted>")
-            index += 1
             continue
         redacted.append(arg)
         index += 1
@@ -187,6 +200,16 @@ def _validate_timeout(timeout_seconds: float | None) -> float | None:
     return timeout_seconds
 
 
+def _resolve_working_directory(
+    working_directory: str | Path | None,
+) -> Path:
+    path = Path.cwd() if working_directory is None else Path(working_directory).expanduser()
+    resolved = path.resolve()
+    if not resolved.is_dir():
+        raise NotADirectoryError(f"capture working directory is not a directory: {path}")
+    return resolved
+
+
 def capture_run(
     output: str | Path,
     generate_args: Sequence[str],
@@ -194,6 +217,7 @@ def capture_run(
     label: str | None = None,
     timeout_seconds: float | None = None,
     include_prompt: bool = False,
+    working_directory: str | Path | None = None,
     command_prefix: Sequence[str] | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> tuple[int, dict[str, object]]:
@@ -203,6 +227,7 @@ def capture_run(
     if not args:
         raise ValueError("at least one generate argument is required")
     timeout_seconds = _validate_timeout(timeout_seconds)
+    working_directory_path = _resolve_working_directory(working_directory)
     if command_prefix is None:
         backend = _backend_value(args)
         if backend != "mlx":
@@ -241,6 +266,7 @@ def capture_run(
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
                 completed = subprocess.run(
                     command,
+                    cwd=working_directory_path,
                     stdout=stdout,
                     stderr=stderr,
                     env=process_environment,
@@ -291,6 +317,7 @@ def capture_run(
             "command": {
                 "argv": redacted_command,
                 "shell": shlex.join(redacted_command),
+                "working_directory": str(working_directory_path),
                 "prompt": prompt,
                 "prompt_included": include_prompt,
             },
@@ -328,10 +355,16 @@ def build_parser(prog: str = "ft mlx-capture") -> argparse.ArgumentParser:
             "Run one `ft generate --backend mlx` command and capture stdout, "
             "stderr, exact hashes, environment metadata, and the parsed report."
         ),
+        allow_abbrev=False,
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--label")
     parser.add_argument("--timeout-seconds", type=float)
+    parser.add_argument(
+        "--working-directory",
+        type=Path,
+        help="directory used as cwd for the generation subprocess",
+    )
     parser.add_argument(
         "--include-prompt",
         action="store_true",
@@ -361,6 +394,7 @@ def main(
             label=args.label,
             timeout_seconds=args.timeout_seconds,
             include_prompt=args.include_prompt,
+            working_directory=args.working_directory,
         )
     except (OSError, ValueError, OverflowError) as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
