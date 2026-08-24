@@ -1,0 +1,2483 @@
+{
+  "completed_at_utc": "2026-08-23T11:12:42.136945+00:00",
+  "git_commit": "db01086076566915a187d0ac402d7385ddfc93b7",
+  "hardware": {
+    "machine": "arm64",
+    "platform": "macOS-15.3-arm64-arm-64bit"
+  },
+  "protocol": {
+    "allocator_cache_mb": 256,
+    "budgets_gb": [
+      0.25,
+      0.5,
+      0.75,
+      1.0,
+      1.25
+    ],
+    "max_tokens": 128,
+    "memory_limit_gb": 10.0,
+    "min_free_percent": 35,
+    "model": "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+    "order": "rotating Latin square; one fresh process per point",
+    "profile": "performance",
+    "prompt": "Hello",
+    "raw_prompt": true,
+    "repeats": 5,
+    "residency": "offload",
+    "system_headroom_gb": 3.2
+  },
+  "runs": [
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.25"
+      ],
+      "free_percent_before": 56,
+      "position": 0,
+      "repeat": 0,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 41.14370441700157,
+        "expert_cache": {
+          "capacity": 55,
+          "evictions": 12329,
+          "hits": 0,
+          "loads": 12384,
+          "misses": 12384,
+          "resident": 55
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 3987739784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5333554824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 268435456,
+          "offload_expert_cache_policy_budget_bytes": 1558739109,
+          "offload_expert_cache_requested_bytes": 268435456,
+          "offload_model_budget_bytes": 6184752907,
+          "offload_total_budget_bytes": 6184752907,
+          "pressure_available_bytes": 9620726743,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6184752907,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 111234,
+          "opens": 222
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.5"
+      ],
+      "free_percent_before": 57,
+      "position": 1,
+      "repeat": 0,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 40.25523308300035,
+        "expert_cache": {
+          "capacity": 110,
+          "evictions": 11241,
+          "hits": 1033,
+          "loads": 11351,
+          "misses": 11351,
+          "resident": 110
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4258075784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5603890824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 536870912,
+          "offload_expert_cache_policy_budget_bytes": 1730537800,
+          "offload_expert_cache_requested_bytes": 536870912,
+          "offload_model_budget_bytes": 6356551598,
+          "offload_total_budget_bytes": 6356551598,
+          "pressure_available_bytes": 9792525434,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6356551598,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 101948,
+          "opens": 211
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.5,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.75"
+      ],
+      "free_percent_before": 56,
+      "position": 2,
+      "repeat": 0,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 39.56355583300319,
+        "expert_cache": {
+          "capacity": 165,
+          "evictions": 10882,
+          "hits": 1337,
+          "loads": 11047,
+          "misses": 11047,
+          "resident": 165
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4528411784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5874229896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 805306368,
+          "offload_expert_cache_policy_budget_bytes": 1730537800,
+          "offload_expert_cache_requested_bytes": 805306368,
+          "offload_model_budget_bytes": 6356551598,
+          "offload_total_budget_bytes": 6356551598,
+          "pressure_available_bytes": 9792525434,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6356551598,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 99216,
+          "opens": 207
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.75,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.0"
+      ],
+      "free_percent_before": 58,
+      "position": 3,
+      "repeat": 0,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 38.72311300000001,
+        "expert_cache": {
+          "capacity": 220,
+          "evictions": 9515,
+          "hits": 2649,
+          "loads": 9735,
+          "misses": 9735,
+          "resident": 220
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4798747784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6144562824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1073741824,
+          "offload_expert_cache_policy_budget_bytes": 2245933876,
+          "offload_expert_cache_requested_bytes": 1073741824,
+          "offload_model_budget_bytes": 6871947674,
+          "offload_total_budget_bytes": 6871947674,
+          "pressure_available_bytes": 10307921510,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6871947674,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 87425,
+          "opens": 190
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.0,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.25"
+      ],
+      "free_percent_before": 58,
+      "position": 4,
+      "repeat": 0,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 38.127720957993006,
+        "expert_cache": {
+          "capacity": 275,
+          "evictions": 8129,
+          "hits": 3980,
+          "loads": 8404,
+          "misses": 8404,
+          "resident": 275
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 5069083784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6414898824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1342177280,
+          "offload_expert_cache_policy_budget_bytes": 2074135184,
+          "offload_expert_cache_requested_bytes": 1342177280,
+          "offload_model_budget_bytes": 6700148982,
+          "offload_total_budget_bytes": 6700148982,
+          "pressure_available_bytes": 10136122818,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6700148982,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 75482,
+          "opens": 154
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.5"
+      ],
+      "free_percent_before": 56,
+      "position": 0,
+      "repeat": 1,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 39.98337116699986,
+        "expert_cache": {
+          "capacity": 110,
+          "evictions": 11241,
+          "hits": 1033,
+          "loads": 11351,
+          "misses": 11351,
+          "resident": 110
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4258075784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5603893896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 536870912,
+          "offload_expert_cache_policy_budget_bytes": 2245933876,
+          "offload_expert_cache_requested_bytes": 536870912,
+          "offload_model_budget_bytes": 6871947674,
+          "offload_total_budget_bytes": 6871947674,
+          "pressure_available_bytes": 10307921510,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6871947674,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 101948,
+          "opens": 211
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.5,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.75"
+      ],
+      "free_percent_before": 60,
+      "position": 1,
+      "repeat": 1,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 40.33484191699972,
+        "expert_cache": {
+          "capacity": 165,
+          "evictions": 10882,
+          "hits": 1337,
+          "loads": 11047,
+          "misses": 11047,
+          "resident": 165
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4528411784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5874226824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 805306368,
+          "offload_expert_cache_policy_budget_bytes": 2245933876,
+          "offload_expert_cache_requested_bytes": 805306368,
+          "offload_model_budget_bytes": 6871947674,
+          "offload_total_budget_bytes": 6871947674,
+          "pressure_available_bytes": 10307921510,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6871947674,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 99216,
+          "opens": 207
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.75,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.0"
+      ],
+      "free_percent_before": 55,
+      "position": 2,
+      "repeat": 1,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 42.66485341700172,
+        "expert_cache": {
+          "capacity": 220,
+          "evictions": 9515,
+          "hits": 2649,
+          "loads": 9735,
+          "misses": 9735,
+          "resident": 220
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4798747784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6144562824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1073741824,
+          "offload_expert_cache_policy_budget_bytes": 2074135184,
+          "offload_expert_cache_requested_bytes": 1073741824,
+          "offload_model_budget_bytes": 6700148982,
+          "offload_total_budget_bytes": 6700148982,
+          "pressure_available_bytes": 10136122818,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6700148982,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 87425,
+          "opens": 190
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.0,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.25"
+      ],
+      "free_percent_before": 57,
+      "position": 3,
+      "repeat": 1,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 47.33670154200081,
+        "expert_cache": {
+          "capacity": 275,
+          "evictions": 8129,
+          "hits": 3980,
+          "loads": 8404,
+          "misses": 8404,
+          "resident": 275
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 5069083784,
+          "allocator_cache_bytes": 1456070648,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6414901896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1342177280,
+          "offload_expert_cache_policy_budget_bytes": 2417732568,
+          "offload_expert_cache_requested_bytes": 1342177280,
+          "offload_model_budget_bytes": 7043746366,
+          "offload_total_budget_bytes": 7043746366,
+          "pressure_available_bytes": 10479720202,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7043746366,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 75482,
+          "opens": 154
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.25"
+      ],
+      "free_percent_before": 58,
+      "position": 4,
+      "repeat": 1,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 43.477535916994384,
+        "expert_cache": {
+          "capacity": 55,
+          "evictions": 12329,
+          "hits": 0,
+          "loads": 12384,
+          "misses": 12384,
+          "resident": 55
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 3987739784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5333557896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 268435456,
+          "offload_expert_cache_policy_budget_bytes": 2417732568,
+          "offload_expert_cache_requested_bytes": 268435456,
+          "offload_model_budget_bytes": 7043746366,
+          "offload_total_budget_bytes": 7043746366,
+          "pressure_available_bytes": 10479720202,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7043746366,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 111234,
+          "opens": 222
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.75"
+      ],
+      "free_percent_before": 58,
+      "position": 0,
+      "repeat": 2,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 43.47435279199999,
+        "expert_cache": {
+          "capacity": 165,
+          "evictions": 10882,
+          "hits": 1337,
+          "loads": 11047,
+          "misses": 11047,
+          "resident": 165
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4528411784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5874229896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 805306368,
+          "offload_expert_cache_policy_budget_bytes": 2589531260,
+          "offload_expert_cache_requested_bytes": 805306368,
+          "offload_model_budget_bytes": 7215545058,
+          "offload_total_budget_bytes": 7215545058,
+          "pressure_available_bytes": 10651518894,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7215545058,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 99216,
+          "opens": 207
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.75,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.0"
+      ],
+      "free_percent_before": 55,
+      "position": 1,
+      "repeat": 2,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 58.52212774999498,
+        "expert_cache": {
+          "capacity": 220,
+          "evictions": 9515,
+          "hits": 2649,
+          "loads": 9735,
+          "misses": 9735,
+          "resident": 220
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4798747784,
+          "allocator_cache_bytes": 1456070648,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6144562824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1073741824,
+          "offload_expert_cache_policy_budget_bytes": 2417732568,
+          "offload_expert_cache_requested_bytes": 1073741824,
+          "offload_model_budget_bytes": 7043746366,
+          "offload_total_budget_bytes": 7043746366,
+          "pressure_available_bytes": 10479720202,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7043746366,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 87425,
+          "opens": 190
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.0,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.25"
+      ],
+      "free_percent_before": 58,
+      "position": 2,
+      "repeat": 2,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 72.24849983400054,
+        "expert_cache": {
+          "capacity": 275,
+          "evictions": 8129,
+          "hits": 3980,
+          "loads": 8404,
+          "misses": 8404,
+          "resident": 275
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 5069083784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6416361136
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1342177280,
+          "offload_expert_cache_policy_budget_bytes": 2245933876,
+          "offload_expert_cache_requested_bytes": 1342177280,
+          "offload_model_budget_bytes": 6871947674,
+          "offload_total_budget_bytes": 6871947674,
+          "pressure_available_bytes": 10307921510,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6871947674,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 75482,
+          "opens": 154
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.25"
+      ],
+      "free_percent_before": 58,
+      "position": 3,
+      "repeat": 2,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 57.55991391599673,
+        "expert_cache": {
+          "capacity": 55,
+          "evictions": 12329,
+          "hits": 0,
+          "loads": 12384,
+          "misses": 12384,
+          "resident": 55
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 3987739784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5333557896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 268435456,
+          "offload_expert_cache_policy_budget_bytes": 2417732568,
+          "offload_expert_cache_requested_bytes": 268435456,
+          "offload_model_budget_bytes": 7043746366,
+          "offload_total_budget_bytes": 7043746366,
+          "pressure_available_bytes": 10479720202,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7043746366,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 111234,
+          "opens": 222
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.5"
+      ],
+      "free_percent_before": 55,
+      "position": 4,
+      "repeat": 2,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 70.4255927080012,
+        "expert_cache": {
+          "capacity": 110,
+          "evictions": 11241,
+          "hits": 1033,
+          "loads": 11351,
+          "misses": 11351,
+          "resident": 110
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4258075784,
+          "allocator_cache_bytes": 1456070648,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5603893896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 536870912,
+          "offload_expert_cache_policy_budget_bytes": 1558739109,
+          "offload_expert_cache_requested_bytes": 536870912,
+          "offload_model_budget_bytes": 6184752907,
+          "offload_total_budget_bytes": 6184752907,
+          "pressure_available_bytes": 9620726743,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6184752907,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 101948,
+          "opens": 211
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.5,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.0"
+      ],
+      "free_percent_before": 56,
+      "position": 0,
+      "repeat": 3,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 70.39874008300103,
+        "expert_cache": {
+          "capacity": 220,
+          "evictions": 9515,
+          "hits": 2649,
+          "loads": 9735,
+          "misses": 9735,
+          "resident": 220
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4798747784,
+          "allocator_cache_bytes": 1456087032,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6144565896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1073741824,
+          "offload_expert_cache_policy_budget_bytes": 2074135184,
+          "offload_expert_cache_requested_bytes": 1073741824,
+          "offload_model_budget_bytes": 6700148982,
+          "offload_total_budget_bytes": 6700148982,
+          "pressure_available_bytes": 10136122818,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6700148982,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 87425,
+          "opens": 190
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.0,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.25"
+      ],
+      "free_percent_before": 58,
+      "position": 1,
+      "repeat": 3,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 73.35984970799473,
+        "expert_cache": {
+          "capacity": 275,
+          "evictions": 8129,
+          "hits": 3980,
+          "loads": 8404,
+          "misses": 8404,
+          "resident": 275
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 5069083784,
+          "allocator_cache_bytes": 1455448056,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6414901896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1342177280,
+          "offload_expert_cache_policy_budget_bytes": 1902336492,
+          "offload_expert_cache_requested_bytes": 1342177280,
+          "offload_model_budget_bytes": 6528350290,
+          "offload_total_budget_bytes": 6528350290,
+          "pressure_available_bytes": 9964324126,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6528350290,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 75482,
+          "opens": 154
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.25"
+      ],
+      "free_percent_before": 60,
+      "position": 2,
+      "repeat": 3,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 63.03939262500353,
+        "expert_cache": {
+          "capacity": 55,
+          "evictions": 12329,
+          "hits": 0,
+          "loads": 12384,
+          "misses": 12384,
+          "resident": 55
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 3987739784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5333554824
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 268435456,
+          "offload_expert_cache_policy_budget_bytes": 2589531260,
+          "offload_expert_cache_requested_bytes": 268435456,
+          "offload_model_budget_bytes": 7215545058,
+          "offload_total_budget_bytes": 7215545058,
+          "pressure_available_bytes": 10651518894,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7215545058,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 111234,
+          "opens": 222
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.5"
+      ],
+      "free_percent_before": 55,
+      "position": 3,
+      "repeat": 3,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 48.96324104099767,
+        "expert_cache": {
+          "capacity": 110,
+          "evictions": 11241,
+          "hits": 1033,
+          "loads": 11351,
+          "misses": 11351,
+          "resident": 110
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4258075784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5603893896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 536870912,
+          "offload_expert_cache_policy_budget_bytes": 1558739109,
+          "offload_expert_cache_requested_bytes": 536870912,
+          "offload_model_budget_bytes": 6184752907,
+          "offload_total_budget_bytes": 6184752907,
+          "pressure_available_bytes": 9620726743,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6184752907,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 101948,
+          "opens": 211
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.5,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.75"
+      ],
+      "free_percent_before": 56,
+      "position": 4,
+      "repeat": 3,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 54.065054541999416,
+        "expert_cache": {
+          "capacity": 165,
+          "evictions": 10882,
+          "hits": 1337,
+          "loads": 11047,
+          "misses": 11047,
+          "resident": 165
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4528411784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5874582704
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 805306368,
+          "offload_expert_cache_policy_budget_bytes": 1730537800,
+          "offload_expert_cache_requested_bytes": 805306368,
+          "offload_model_budget_bytes": 6356551598,
+          "offload_total_budget_bytes": 6356551598,
+          "pressure_available_bytes": 9792525434,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6356551598,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 99216,
+          "opens": 207
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.75,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.25"
+      ],
+      "free_percent_before": 58,
+      "position": 0,
+      "repeat": 4,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 46.97733333400538,
+        "expert_cache": {
+          "capacity": 275,
+          "evictions": 8129,
+          "hits": 3980,
+          "loads": 8404,
+          "misses": 8404,
+          "resident": 275
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 5069083784,
+          "allocator_cache_bytes": 1456070648,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6414901896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1342177280,
+          "offload_expert_cache_policy_budget_bytes": 2245933876,
+          "offload_expert_cache_requested_bytes": 1342177280,
+          "offload_model_budget_bytes": 6871947674,
+          "offload_total_budget_bytes": 6871947674,
+          "pressure_available_bytes": 10307921510,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6871947674,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 75482,
+          "opens": 154
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.25"
+      ],
+      "free_percent_before": 55,
+      "position": 1,
+      "repeat": 4,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 69.97978875000263,
+        "expert_cache": {
+          "capacity": 55,
+          "evictions": 12329,
+          "hits": 0,
+          "loads": 12384,
+          "misses": 12384,
+          "resident": 55
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 3987739784,
+          "allocator_cache_bytes": 1456070648,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5333557896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 268435456,
+          "offload_expert_cache_policy_budget_bytes": 2245933876,
+          "offload_expert_cache_requested_bytes": 268435456,
+          "offload_model_budget_bytes": 6871947674,
+          "offload_total_budget_bytes": 6871947674,
+          "pressure_available_bytes": 10307921510,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6871947674,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 111234,
+          "opens": 222
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.25,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.5"
+      ],
+      "free_percent_before": 55,
+      "position": 2,
+      "repeat": 4,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 88.0781627910037,
+        "expert_cache": {
+          "capacity": 110,
+          "evictions": 11241,
+          "hits": 1033,
+          "loads": 11351,
+          "misses": 11351,
+          "resident": 110
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4258075784,
+          "allocator_cache_bytes": 1456082424,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5603893896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 536870912,
+          "offload_expert_cache_policy_budget_bytes": 1730537800,
+          "offload_expert_cache_requested_bytes": 536870912,
+          "offload_model_budget_bytes": 6356551598,
+          "offload_total_budget_bytes": 6356551598,
+          "pressure_available_bytes": 9792525434,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6356551598,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 101948,
+          "opens": 211
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.5,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "0.75"
+      ],
+      "free_percent_before": 57,
+      "position": 3,
+      "repeat": 4,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 81.31969687499804,
+        "expert_cache": {
+          "capacity": 165,
+          "evictions": 10882,
+          "hits": 1337,
+          "loads": 11047,
+          "misses": 11047,
+          "resident": 165
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4528411784,
+          "allocator_cache_bytes": 1456078840,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 5874229896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 805306368,
+          "offload_expert_cache_policy_budget_bytes": 2761329951,
+          "offload_expert_cache_requested_bytes": 805306368,
+          "offload_model_budget_bytes": 7387343749,
+          "offload_total_budget_bytes": 7387343749,
+          "pressure_available_bytes": 10823317585,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 7387343749,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 99216,
+          "opens": 207
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 0.75,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    },
+    {
+      "command": [
+        "/Users/steve/Documents/ChatGPT/FreeToken-MLX Minimal/.venv/bin/ft",
+        "generate",
+        "--backend",
+        "mlx",
+        "--model",
+        "/Users/steve/.cache/freetoken/Qwen1.5-MoE-A2.7B-BF16-Q4Experts",
+        "--prompt",
+        "Hello",
+        "--raw-prompt",
+        "--max-tokens",
+        "128",
+        "--profile",
+        "performance",
+        "--residency",
+        "offload",
+        "--quiet-cache",
+        "--memory-limit-gb",
+        "10.0",
+        "--system-headroom-gb",
+        "3.2",
+        "--allocator-cache-mb",
+        "256",
+        "--expert-cache-budget-gb",
+        "1.0"
+      ],
+      "free_percent_before": 56,
+      "position": 4,
+      "repeat": 4,
+      "report": {
+        "async_overlap": true,
+        "backend": "mlx",
+        "cache_policy": "slru",
+        "elapsed_seconds": 59.885100250001415,
+        "expert_cache": {
+          "capacity": 220,
+          "evictions": 9515,
+          "hits": 2649,
+          "loads": 9735,
+          "misses": 9735,
+          "resident": 220
+        },
+        "expert_quantization": {
+          "bits": 4,
+          "group_size": 64,
+          "mode": "affine"
+        },
+        "generated_tokens": 128,
+        "grouped_gemv": false,
+        "memory": {
+          "active_bytes": 4798747784,
+          "allocator_cache_bytes": 1456119800,
+          "limit_bytes": 10737418240,
+          "peak_bytes": 6144565896
+        },
+        "model_type": "qwen2_moe",
+        "profile": "performance",
+        "residency": {
+          "checkpoint_bytes": 10726124696,
+          "dense_checkpoint_bytes": 3717402624,
+          "draft_checkpoint_bytes": 0,
+          "estimated_resident_peak_bytes": 11799301842,
+          "memory_limit_bytes": 10737418240,
+          "offload_base_reserve_bytes": 4626013798,
+          "offload_draft_reserve_bytes": 0,
+          "offload_expert_cache_budget_bytes": 1073741824,
+          "offload_expert_cache_policy_budget_bytes": 1558739109,
+          "offload_expert_cache_requested_bytes": 1073741824,
+          "offload_model_budget_bytes": 6184752907,
+          "offload_total_budget_bytes": 6184752907,
+          "pressure_available_bytes": 9620726743,
+          "reason": "forced_by_user",
+          "requested": "offload",
+          "resident_budgets": {
+            "current_pressure": 6184752907,
+            "mlx_working_set": 10737418240,
+            "physical_headroom": 13743895348
+          },
+          "selected": "offload",
+          "system_headroom_bytes": 3435973836
+        },
+        "shard_cache": {
+          "capacity": 8,
+          "hits": 87425,
+          "opens": 190
+        },
+        "speculative": {
+          "accepted_tokens": 0,
+          "draft_model": null,
+          "draft_output_fraction": 0.0,
+          "enabled": false,
+          "num_draft_tokens": 0
+        }
+      },
+      "requested_cache_budget_gb": 1.0,
+      "stderr": "mlx_residency selected=offload reason=forced_by_user estimated_peak=11799301842"
+    }
+  ],
+  "schema_version": 1,
+  "started_at_utc": "2026-08-23T10:48:30.963130+00:00"
+}

@@ -1,0 +1,96 @@
+{
+  "artifact_commit": "7b3feed2cc26d277254d29641d819ee133293deb",
+  "hardware": {
+    "soc": "Apple M4",
+    "unified_memory_gb": 16,
+    "os": "macOS 15.3",
+    "architecture": "arm64"
+  },
+  "software": {
+    "python": "3.12.13",
+    "mlx_lm": "0.31.3"
+  },
+  "model": {
+    "id": "Qwen/Qwen1.5-MoE-A2.7B",
+    "model_type": "qwen2_moe",
+    "layers": 24,
+    "routed_experts_per_layer": 60,
+    "selected_experts_per_token": 4
+  },
+  "safety": {
+    "mlx_memory_limit_gb": 10,
+    "system_headroom_gb": 3.2,
+    "batch_size": 1
+  },
+  "availability_and_tradeoff": [
+    {
+      "path": "stock_mlx_lm_bf16",
+      "result": "Metal OOM before token 1",
+      "reported_peak_gb": 28.63
+    },
+    {
+      "path": "freetoken_bf16_offload_conservative",
+      "generated_tokens": 32,
+      "tokens_per_second": 1.88,
+      "peak_gb": 5.83
+    },
+    {
+      "path": "freetoken_bf16_offload_expanded",
+      "generated_tokens": 128,
+      "tokens_per_second": 2.05,
+      "peak_gb": 9.03,
+      "cache_slots_before": 121,
+      "cache_slots_after": 304,
+      "misses_before": 9672,
+      "misses_after": 8183,
+      "elapsed_before_s": 64.59,
+      "elapsed_after_s": 62.33
+    },
+    {
+      "path": "freetoken_bf16_dense_q4_routed_experts",
+      "generated_tokens": 32,
+      "tokens_per_second": 4.49,
+      "peak_gb": 7.93,
+      "statistic": "three-process median"
+    }
+  ],
+  "projection_precision_equal_memory_128_tokens": {
+    "method": "fixed simulated available pressure; interleaved Q4,mixed,mixed,Q4; raw prompt Hello; greedy decode",
+    "uniform_q4": {
+      "elapsed_s": [17.70446845799961, 17.329947624999477],
+      "paired_mean_s": 17.517208041499544,
+      "tokens_per_second_from_mean": 7.307107977535185,
+      "cache_slots": 864,
+      "misses": 3489,
+      "peak_bytes": 8015758854
+    },
+    "q3_gate_up_q4_down": {
+      "elapsed_s": [15.99924745899989, 15.533027165998647],
+      "paired_mean_s": 15.766137312499268,
+      "tokens_per_second_from_mean": 8.118677249441936,
+      "cache_slots": 1015,
+      "misses": 2822,
+      "peak_bytes": 8026244614
+    },
+    "throughput_improvement_percent": 11.106565071814,
+    "miss_reduction_percent": 19.117225565777
+  },
+  "projection_precision_fixed_864_slots_64_tokens": {
+    "uniform_q4_elapsed_s": [9.227182124999672, 9.00779304200114],
+    "mixed_elapsed_s": [8.73997233299815, 8.871637374999409],
+    "throughput_improvement_percent": 3.539527731661,
+    "uniform_q4_peak_bytes": 8015758854,
+    "mixed_peak_bytes": 7392904710
+  },
+  "teacher_forced_quality_proxy": {
+    "target_tokens": 135,
+    "corpus": "three constructed English factual, programming, and narrative passages",
+    "negative_log_likelihood": {
+      "bf16": 2.618027976707176,
+      "uniform_q4_experts": 2.707112799750434,
+      "q3_gate_up_q4_down": 2.7254830254448783,
+      "uniform_q3_experts": 2.865209847909433
+    },
+    "warning": "This proxy is not a standard downstream quality evaluation."
+  }
+}
