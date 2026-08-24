@@ -17,8 +17,8 @@ from freetoken.cli import main as cli_main  # noqa: E402
 from freetoken.mlx_capture import _source_metadata, capture_run, main  # noqa: E402
 
 
-def _success_script(output: str = "hello") -> str:
-    report = {
+def _report() -> dict:
+    return {
         "backend": "mlx",
         "generated_tokens": 1,
         "elapsed_seconds": 0.25,
@@ -26,10 +26,13 @@ def _success_script(output: str = "hello") -> str:
         "memory": {"peak_bytes": 1024},
         "expert_cache": {"misses": 4},
     }
+
+
+def _success_script(output: str = "hello") -> str:
     return (
         "import json; "
         f"print({output!r}); "
-        f"print(json.dumps({report!r}))"
+        f"print(json.dumps({_report()!r}))"
     )
 
 
@@ -57,6 +60,10 @@ class MLXCaptureTest(unittest.TestCase):
             self.assertEqual(persisted["schema_version"], 1)
             self.assertEqual(persisted["command"]["argv"][-1], "<redacted>")
             self.assertNotIn("private prompt", persisted["command"]["shell"])
+            self.assertEqual(
+                persisted["command"]["working_directory"],
+                str(Path.cwd().resolve()),
+            )
             prompt = persisted["command"]["prompt"]
             self.assertEqual(prompt["bytes"], len(b"private prompt"))
             self.assertEqual(
@@ -72,6 +79,30 @@ class MLXCaptureTest(unittest.TestCase):
                 hashlib.sha256(stdout.read_bytes()).hexdigest(),
             )
 
+    def test_prompt_abbreviations_are_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = (
+                (["--prom", "private separate"], "private separate"),
+                (["--prom=private-inline"], "private-inline"),
+                (["--promp", "private longer"], "private longer"),
+            )
+            for index, (arguments, secret) in enumerate(cases):
+                with self.subTest(arguments=arguments):
+                    output = root / f"run-{index}"
+                    code, manifest = capture_run(
+                        output,
+                        arguments,
+                        command_prefix=[sys.executable, "-c", _success_script()],
+                    )
+                    self.assertEqual(code, 0)
+                    self.assertNotIn(secret, manifest["command"]["shell"])
+                    self.assertEqual(
+                        manifest["command"]["prompt"]["sha256"],
+                        hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+                    )
+                    self.assertIn("<redacted>", manifest["command"]["shell"])
+
     def test_include_prompt_is_explicit_opt_in(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "run"
@@ -84,6 +115,43 @@ class MLXCaptureTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(manifest["command"]["argv"][-1], "--prompt=visible")
         self.assertTrue(manifest["command"]["prompt_included"])
+
+    def test_working_directory_is_used_and_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            working = root / "workspace"
+            working.mkdir()
+            output = root / "run"
+            script = (
+                "import json, os; "
+                "print(os.getcwd()); "
+                f"print(json.dumps({_report()!r}))"
+            )
+            code, manifest = capture_run(
+                output,
+                ["argument"],
+                working_directory=working,
+                command_prefix=[sys.executable, "-c", script],
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                manifest["command"]["working_directory"], str(working.resolve())
+            )
+            self.assertTrue(
+                (output / "stdout.log").read_text().startswith(str(working.resolve()))
+            )
+
+    def test_invalid_working_directory_is_rejected_before_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing"
+            with self.assertRaisesRegex(NotADirectoryError, "working directory"):
+                capture_run(
+                    root / "run",
+                    ["argument"],
+                    working_directory=missing,
+                    command_prefix=[sys.executable, "-c", _success_script()],
+                )
 
     def test_nonzero_target_exit_still_publishes_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +284,7 @@ class MLXCaptureTest(unittest.TestCase):
             main(["--help"])
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--include-prompt", stdout.getvalue())
+        self.assertIn("--working-directory", stdout.getvalue())
 
     def test_root_cli_exposes_capture_without_importing_accelerators(self):
         modules_before = set(sys.modules)
