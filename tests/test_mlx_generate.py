@@ -167,7 +167,7 @@ class MLXGenerateTest(unittest.TestCase):
             yield response("x", 1, finish_reason="length")
 
         options = GenerationOptions(
-            max_kv_size=2048,
+            max_kv_size=None,
             kv_bits=4,
             kv_group_size=32,
             quantized_kv_start=256,
@@ -187,14 +187,13 @@ class MLXGenerateTest(unittest.TestCase):
 
         self.assertEqual(captured, {
             "max_tokens": 1,
-            "max_kv_size": 2048,
             "prefill_step_size": 512,
             "kv_bits": 4,
             "kv_group_size": 32,
             "quantized_kv_start": 256,
         })
         self.assertEqual(report["kv_cache"], {
-            "max_size": 2048,
+            "max_size": None,
             "bits": 4,
             "group_size": 32,
             "quantized_start": 256,
@@ -300,10 +299,11 @@ class MLXGenerateTest(unittest.TestCase):
             draft_model=None,
         )
         invalid = (
-            ({**base, "max_kv_size": 7}, "at least 8"),
+            ({**base, "max_kv_size": 4}, "four retained prefix"),
             ({**base, "quantized_kv_start": -1}, "cannot be negative"),
             ({**base, "prefill_step_size": 0}, "at least 1"),
-            ({**base, "max_kv_size": 8, "draft_model": "draft"}, "not supported"),
+            ({**base, "max_kv_size": 5, "draft_model": "draft"}, "not supported"),
+            ({**base, "max_kv_size": 5, "kv_bits": 4}, "RotatingKVCache"),
         )
         for values, message in invalid:
             with self.subTest(values=values), self.assertRaisesRegex(
@@ -317,7 +317,6 @@ class MLXGenerateTest(unittest.TestCase):
                 "--backend", "mlx",
                 "--model", "target",
                 "--max-kv-size", "2048",
-                "--kv-bits", "4",
                 "--prefill-step-size", "512",
             ])
             self.assertEqual(result, 7)
