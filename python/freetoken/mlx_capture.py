@@ -120,7 +120,6 @@ def _source_metadata() -> dict[str, object]:
         "--untracked-files=no",
     )
     return {
-        "repository_root": str(repo_root) if commit is not None else None,
         "git_commit": commit,
         "git_dirty": bool(dirty_output) if dirty_output is not None else None,
     }
@@ -267,6 +266,7 @@ def capture_run(
         if status == "completed":
             try:
                 parsed_run = asdict(load_run(stdout_path, label=label or "capture"))
+                parsed_run["path"] = "stdout.log"
                 harness_exit_code = 0
             except (OSError, UnicodeError, ValueError, OverflowError) as exc:
                 status = "invalid_report"
