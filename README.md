@@ -2,6 +2,31 @@
 
 FreeToken expert offload для Apple Silicon.
 
+## UPDATE
+
+Последнее обновление укрепляет проект для длительной серверной эксплуатации.
+Исправлено завершение benchmark-процессов при разрыве SSE-соединения, очистка
+ресурсов при отмене генерации и гонка между параллельными cache rebuild.
+Параметры `temperature`, `top_p`, `top_k`, rebuild timeout и daemon port теперь
+проверяются на границе API. Эти сценарии закреплены регрессионными тестами;
+документация и hosted CI приведены в соответствие с фактическими Linux/CUDA и
+macOS/MLX путями. Подробности и границы проверки:
+[docs/AUDIT.md](docs/AUDIT.md).
+
+### Чем этот репозиторий отличается от оригинала
+
+| Репозиторий | Назначение и отличия |
+| --- | --- |
+| [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken) | Оригинальный edge-native MoE serving engine. Основной runtime построен вокруг Python/Torch, Linux/Windows и NVIDIA CUDA; предоставляет server, scheduler, distributed execution, OpenAI/Anthropic-compatible API и широкую CUDA-модельную матрицу. |
+| Первоначальный FreeToken-MLX fork | Сохранил исходную архитектуру FreeToken и добавил отдельный локальный MLX backend для Apple Silicon: expert offload, ограниченный общий cache и запуск `Qwen/Qwen1.5-MoE-A2.7B` при недостатке unified memory. |
+| Этот `agisota/freetoken-mlx` | Продолжает MLX-направление форка и дополнительно укрепляет общий код: управляемое завершение процессов и отмена запросов, сериализованный cache rebuild, строгая API-валидация, регрессионные тесты, hosted CI и проверенная русская документация. |
+
+MLX backend не является полной заменой оригинального CUDA runtime. На macOS
+поддерживается узкий локальный сценарий для `model_type=qwen2_moe`, batch size 1
+и Apple Silicon; исходные server/distributed/CUDA возможности остаются
+Linux/NVIDIA-путём. Это независимо поддерживаемый форк, а не официальный MLX-релиз
+FlashML.
+
 > [!IMPORTANT]
 > FreeToken-MLX — независимо поддерживаемый форк
 > [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken), а не
