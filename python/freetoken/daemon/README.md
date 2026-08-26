@@ -1,96 +1,53 @@
-# `ft daemon` — простой демон-режим для FreeToken
+# ft daemon
 
-Небольшая, надёжная управляющая плоскость **без torch**, которая владеет жизненным циклом дочернего
-процесса `ft serve` и открывает управление / логи / метрики по HTTP. Движок становится постоянным
-сервисом; всё, что умеет HTTP, — тонкий клиент. Этот файл — дизайн-референс.
+`ft daemon` — supervisor без импорта torch для CUDA/Torch процесса `ft serve`. Он владеет lifecycle, logs и control endpoints; inference traffic продолжает идти прямо в `ft serve`.
 
-```
-client (ft ctl / curl / any HTTP client)             chat traffic → serve DIRECTLY
-        │ HTTP control plane (loopback :1900)                     │
-        ▼                                                         ▼
-   ft daemon  ──spawn / signal / tail──▶  ft serve  (model · inference · MAY crash)
-   (no torch)                              └─ /health /v1/stats  (per-serve control API)
-        ▲
-   systemd  Restart=always · RestartSec=1 · KillMode=process
+```text
+client ──control HTTP──> ft daemon ──spawn / signal / logs──> ft serve
+client ──inference HTTP──────────────────────────────────────> ft serve
 ```
 
-## Почему без torch (единственное непреложное требование)
+Daemon намеренно не импортирует `torch`, CUDA и server modules. Поэтому crash native engine может завершить `ft serve`, не уронив control plane.
 
-Демон импортирует **только** stdlib + `fastapi` + `uvicorn` (+ мелкие чтения `/proc` + опциональный
-`pynvml`). Он никогда не импортирует `torch` / CUDA / `flashinfer` / `sgl_kernel`, а также что-либо из
-`freetoken.server.*` (его `__init__` тянет torch) или `freetoken.utils.*` (его `__init__` тянет
-transformers). Именно это делает его неубиваемым: CUDA-сбой или сегфолт нативного расширения убивает
-процесс, который их загрузил, — а демон не загружает ни того, ни другого. Вся рискованная работа живёт
-в изолированном дочернем процессе `ft serve`. Это требование enforced тестом-стражем импорта
-`tests/daemon/test_daemon_import_safety.py`.
-
-## Запуск сервера
+## Запуск
 
 ```bash
-ft daemon --host 127.0.0.1 --port 1900         # bare/flags = run the daemon server
-# or as a service (survives logout, auto-restarts): see ft-daemon.service
+ft daemon --host 127.0.0.1 --port 1900
 ```
 
-Состояние (single-instance lock, pidfile serve для повторного усыновления, логи на каждый serve)
-живёт в `--state-dir` (по умолчанию `~/.freetoken/daemon`, переопределяется `$FREETOKEN_DAEMON_DIR`).
+State по умолчанию находится в `~/.freetoken/daemon`; override — `--state-dir` или `FREETOKEN_DAEMON_DIR`.
 
-## Управление им (`ft daemon <verb>` — свой вход, отличный от `ft ctl`)
-
-`ft daemon` с **глаголом** — это клиент (управляет запущенным демоном по HTTP); голый `ft daemon`
-запускает сервер. `ft ctl` не тронут — он адресует запущенный *serve*, а не демон.
+## Команды управления
 
 ```bash
-ft daemon self                                 # daemon self-health
-ft daemon start MODEL --port 1919 -- --moe-cache-auto   # args after -- go to ft serve
+ft daemon self
+ft daemon start /path/to/model --port 1919 -- --moe-cache-auto
 ft daemon status
-ft daemon logs                                 # stream engine logs (SSE)
-ft daemon health                               # proxied serve /health (camelCased)
-ft daemon metrics                              # engine-only RAM(PSS)+VRAM footprint
-ft daemon switch OTHER_MODEL                    # stop old + start new
+ft daemon logs
+ft daemon health
+ft daemon metrics
+ft daemon switch /path/to/other-model
 ft daemon stop
-# Recovery only: permit a degraded receipt if the failed engine cannot seal final totals.
-ft daemon stop --force
 ```
 
-Адресуйте нестандартный демон через `--url http://host:1900` (или `$FREETOKEN_DAEMON_URL`) и
-`--token`/`$FREETOKEN_DAEMON_TOKEN`.
+Точные arguments печатает `ft daemon --help`. Голый `ft daemon` запускает supervisor; `ft daemon <verb>` управляет уже запущенным. `ft ctl` адресует `ft serve`, а не daemon.
 
-## HTTP API (camelCase JSON, по умолчанию loopback)
+## HTTP граница
 
-| Метод / путь | Примечания |
+Default daemon endpoint — loopback `http://127.0.0.1:1900`. Для другого daemon используйте `--url` или `FREETOKEN_DAEMON_URL`. `--token` или `FREETOKEN_DAEMON_TOKEN` требует `X-FT-Token` на всех endpoints, кроме `/health`.
+
+| Endpoint | Назначение |
 | --- | --- |
-| `GET /health` | Самодиагностика демона; всегда отвечает, никогда не закрыт `--token`. |
-| `POST /engine/start` `{model,port,args[]}` | Идемпотентен по полному `(model,port,args)`; другая конфигурация на том же порту → `409`. |
-| `POST /engine/stop` `{force?:false}` | Закрыть приём запросов, drain/abort, надёжно поставить в очередь квитанцию финального учёта, затем `SIGTERM`→grace→`SIGKILL`. Сбой prepare/outbox сохраняет движок. |
-| `POST /engine/switch` `{model,port,args[],force?:false}` | Одна сериализованная транзакция stop-accounting-start. |
-| `GET /engine/status` | `{running,pid,model,port,uptimeS,lastExitCode,…}`; переживает любой отдельный serve. |
-| `GET /engine/logs?since=` | SSE, без ANSI, tqdm-`\r` схлопнуты, replay кольца, `id:<seq>`, возобновление по `Last-Event-ID`. |
-| `GET /engine/metrics` | `{ramBytes,vramBytes}` — только собственный след дерева serve. |
-| `GET /engine/health` | Проксированный serve `/health` + достижимость демона. |
-| `GET /engine/stats` | Проксированный serve `/v1/stats`. |
-| `GET /accounting/pending` | Неподтверждённые надёжные квитанции финального учёта, воспроизводимые после падения Desktop/клиента. |
-| `POST /accounting/ack` `{receiptId}` | Идемпотентно удаляет квитанцию только после того, как клиент надёжно её применил. |
-| `POST /checkpoint/start\|cancel` | Контролируемый `ft checkpoint` (эксклюзив GPU: сначала останавливает serve). |
+| `GET /health` | Self-health daemon. |
+| `POST /engine/start` | Запускает одну `ft serve` configuration. |
+| `POST /engine/stop` | Останавливает engine; `force` всегда explicit. |
+| `POST /engine/switch` | Serialized stop/start transition. |
+| `GET /engine/status`, `/logs`, `/metrics`, `/health`, `/stats` | State engine, logs, resource use и proxied endpoints. |
+| `GET /accounting/pending`, `POST /accounting/ack` | Persistent final-accounting receipts. |
+| `POST /checkpoint/start\|cancel` | Controlled checkpoint conversion. |
 
-Задайте `--token` (или `$FREETOKEN_DAEMON_TOKEN`), чтобы требовать заголовок `X-FT-Token` на всём,
-кроме `/health`.
+Daemon использует single-instance lock, хранит PID/identity child process и может re-adopt matching live `ft serve` после собственного restart. Он не перезапускает crashed engine без явной настройки.
 
-К деструктивному эндпоинту serve `POST /v1/admin/prepare-stop` демон обращается только через
-loopback; serve отвергает не-loopback вызывающих, даже когда его inference-API слушает на
-`0.0.0.0`. `force` никогда не подразумевается: это явное решение о восстановлении, которое может
-записать null-итоги для ненаблюдаемого хвоста, когда сломанный движок нельзя ни осушить, ни опросить.
+## Безопасность
 
-## Самосохранение (в этом весь смысл)
-
-- **Единственный владелец:** flock pidfile → не более одного демона; при старте он **повторно
-  усыновляет** ещё работающий serve, записанный в pidfile (безопасно к переиспользованию PID за счёт
-  start-time + идентичности argv), так что сбой демона никогда не оставляет живой движок сиротой.
-- **Движок переживает демон:** по `SIGTERM` демон по умолчанию *отцепляется* (оставляет serve
-  работать); движок убивает только `POST /engine/stop`. Пара к этому — `KillMode=process` в systemd.
-- **OOM-политика:** демон периодически повышает `oom_score_adj` дерева serve, делая 22-ГБ serve —
-  а не крошечного демона — предпочтительной жертвой ядра.
-- **Никогда не блокирует / никогда не бросает наружу:** spawn/kill/`/proc`/NVML/прокси выполняются вне
-  event loop; ошибки обработчиков становятся 5xx; деградировавший старт работает даже без serve /
-  со устаревшим pidfile.
-- **Политика падений:** крах serve фиксируется (`lastExitCode`) и сообщается, но не перезапускается
-  вслепую (слепые циклы рестарта при OOM от слишком большой модели). Опционально — `--auto-restart`.
+`ft serve` по умолчанию bind к loopback. Daemon обращается к `POST /v1/admin/prepare-stop` только через loopback; не публикуйте ни одну control plane без authenticated boundary.

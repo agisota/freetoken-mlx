@@ -202,6 +202,13 @@ class FTWReader:
         assert self.index.get("format") == FORMAT_TAG, f"not a {FORMAT_TAG}: {path}"
         self.dir = path
         self.shards = sorted(self.index["shards"], key=lambda s: s["global_off"])
+        root = os.path.realpath(self.dir)
+        for _shard in self.shards:
+            _resolved = os.path.realpath(os.path.join(self.dir, _shard["file"]))
+            if not (_resolved == root or _resolved.startswith(root + os.sep)):
+                raise ValueError(
+                    f"FTW index shard escapes checkpoint dir: {_shard['file']!r}"
+                )
         self.tensors = {t["name"]: t for t in self.index["tensors"]}
         self._fds: dict[str, int] = {}
         self._maps: dict[str, tuple[mmap.mmap, memoryview]] = {}

@@ -865,3 +865,60 @@ def test_tool_result_carries_the_wire_tool_use_id():
     results = [m for m in spec.messages if m["role"] == "tool"]
     assert [(m["tool_call_id"], m["content"]) for m in results] == [
         ("toolu_b", "60F"), ("toolu_a", "72F")]
+
+
+# ------------------------------------------------------- sampling validation
+import pytest
+
+
+def _sampling_cases():
+    return [
+        (-0.5, None, None),          # negative temperature
+        (float("nan"), None, None),  # non-finite temperature
+        (float("inf"), None, None),
+        (None, None, 0.0),           # top_p must be in (0, 1]
+        (None, None, 1.5),
+        (None, 0, None),             # top_k is -1 (disabled) or >= 1
+        (None, -2, None),
+    ]
+
+
+@pytest.mark.parametrize(("temperature", "top_k", "top_p"), _sampling_cases())
+def test_invalid_sampling_rejected_before_dispatch(temperature, top_k, top_p):
+    """resolve_sampling raises ValueError; /v1/messages returns the Anthropic
+    invalid_request_error 400 without dispatching to the engine."""
+    from freetoken.server.generation import resolve_sampling
+
+    req = AnthropicMessagesRequest.model_validate({
+        "model": "claude-x",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+    })
+    state = SimpleNamespace(config=SimpleNamespace(reasoning_parser=None))
+    with pytest.raises(ValueError):
+        A.convert_anthropic_to_genspec(req, {})
+
+    response = asyncio.run(
+        A.handle_anthropic_messages(req, request=None, state=state, model_sampling={})
+    )
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize(
+    ("temperature", "top_k", "top_p"),
+    [(0.0, -1, 1.0), (0.7, 1, 0.5), (2.0, 64, 0.99)],
+)
+def test_valid_sampling_boundaries_pass_through(temperature, top_k, top_p):
+    from freetoken.server.generation import resolve_sampling
+    params = resolve_sampling(
+        temperature=temperature, top_k=top_k, top_p=top_p,
+        max_tokens=16, ignore_eos=False, model_sampling={},
+    )
+    assert params.temperature == temperature
+    assert params.top_k == top_k
+    assert params.top_p == top_p
