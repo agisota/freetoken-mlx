@@ -1,62 +1,59 @@
 # Быстрый старт
 
-Предполагается, что FreeToken установлен — см. [install.md](install.md).
+Сначала выполните установку для своей платформы: [Linux/CUDA или macOS/MLX](install.md).
 
-## Запуск сервера
+## Узнать доступные команды
 
 ```bash
-ft serve --model ~/models/Qwen3.6-35B-A3B
+.venv/bin/ft --help
 ```
 
-`--model` принимает и id репозитория Hugging Face. Всё остальное — dtype,
-бэкенды attention и MoE, размеры кэшей, парсеры tool-call и reasoning —
-определяется автоматически из чекпоинта и GPU; флаги см. в [cli.md](cli.md).
-Сервер готов, когда в логе появляется `API server is ready to serve on 127.0.0.1:1919`.
+Ожидаемый результат — девять top-level команд: `generate`, `mlx-quantize-experts`, `serve`, `shell`, `ctl`, `daemon`, `launch`, `checkpoint` и `bench`.
 
-## Отправка запроса
+## Локальная MLX-генерация
 
-Проверьте, какая модель обслуживается:
+На Apple Silicon команда ниже скачивает модель при первом запуске и печатает текст, затем JSON-отчёт:
 
 ```bash
+.venv/bin/ft generate \
+  --backend mlx \
+  --model Qwen/Qwen1.5-MoE-A2.7B \
+  --prompt Hello \
+  --raw-prompt \
+  --max-tokens 16 \
+  --batch-size 1
+```
+
+Используйте `--residency auto` по умолчанию. Для воспроизводимого offload-измерения задайте `--residency offload`, `--memory-limit-gb` и `--system-headroom-gb`.
+
+## Преобразовать routed experts
+
+Команда создаёт новый mixed checkpoint; исходный checkpoint не изменяется:
+
+```bash
+.venv/bin/ft mlx-quantize-experts \
+  --model /path/to/qwen-moe \
+  --output /path/to/qwen-moe-q4-experts \
+  --bits 4 \
+  --group-size 64
+```
+
+Поддерживаются affine bits `2, 3, 4, 5, 6, 8` и group size `32, 64, 128`.
+
+## CUDA server
+
+На Linux/CUDA запуск требует локальной модели и совместимого GPU:
+
+```bash
+.venv/bin/ft serve --model /path/to/model
 curl http://127.0.0.1:1919/v1/models
 ```
 
-Затем используйте этот id в поле `model`:
+Сервер по умолчанию слушает loopback. Последняя команда возвращает JSON с доступной моделью. Не открывайте `--host 0.0.0.0` без отдельного контроля доступа.
 
-```bash
-curl http://127.0.0.1:1919/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "Qwen3.6-35B-A3B",
-    "messages": [{"role": "user", "content": "What is a Mixture-of-Experts model?"}],
-    "max_tokens": 256,
-    "stream": true
-  }'
-```
+## Следующий шаг
 
-FreeToken обслуживает OpenAI API (`/v1/chat/completions`, `/v1/responses`,
-`/v1/models`) и Anthropic API (`/v1/messages`,
-`/v1/messages/count_tokens`), поэтому клиентская библиотека любого из них
-работает, если указать её base URL на сервер.
-
-## Чат в терминале
-
-Простой TUI для взаимодействия с сервером:
-
-```bash
-ft shell                                    # attach to the server above
-ft shell --model ~/models/Qwen3.6-35B-A3B   # start an engine and chat, one process
-```
-
-`/help` перечисляет команды внутри шелла. Режим подключения не требует GPU,
-поэтому он также управляет сервером на другой машине (`--server URL`).
-
-## Использование кодинг-агента
-
-```bash
-ft launch claude   # claude / codex / dsh / hermes / openclaw / opencode
-```
-
-Записывает конфиг провайдера этого агента, устанавливает его CLI при
-отсутствии и запускает его против вашего сервера. `--dry-run` показывает
-изменения без применения.
+- Полная справка флагов: [CLI reference](cli.md).
+- Поддержка моделей: [models](models.md).
+- MLX memory/cache tuning: [MLX performance tuning](MLX_PERFORMANCE_TUNING_GUIDE.md).
+- Управление долгоживущим CUDA server: [`ft daemon`](../python/freetoken/daemon/README.md).

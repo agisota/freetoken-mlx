@@ -7,6 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
+pytest.importorskip("mlx.core", reason="requires the Apple-Silicon MLX runtime")
+pytest.importorskip("mlx_lm", reason="requires the Apple-Silicon mlx-lm runtime")
+
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np

@@ -676,3 +676,57 @@ def test_minimax_http_non_stream_forces_implicit_reasoning_without_request_knob(
     message = response["choices"][0]["message"]
     assert message["reasoning_content"] == "private thought"
     assert message["content"] == "visible answer"
+
+
+# ------------------------------------------------------- sampling validation
+import pytest
+
+from freetoken.server.generation import resolve_sampling
+
+
+def _sampling_cases():
+    return [
+        (-0.5, None, None),          # negative temperature
+        (float("nan"), None, None),  # non-finite temperature
+        (float("inf"), None, None),
+        (None, None, 0.0),           # top_p must be in (0, 1]
+        (None, None, 1.5),
+        (None, 0, None),             # top_k is -1 (disabled) or >= 1
+        (None, -2, None),
+    ]
+
+
+@pytest.mark.parametrize(("temperature", "top_k", "top_p"), _sampling_cases())
+def test_invalid_sampling_rejected_before_dispatch(temperature, top_k, top_p):
+    """resolve_sampling raises a stable ValueError for out-of-domain sampling;
+    the OpenAI adapter surfaces it as its existing 400 client error response."""
+    req = ChatCompletionRequest.model_validate({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+    })
+    state = FakeState([])
+    with pytest.raises(ValueError):
+        chat_request_to_genspec(req, {})
+
+    response = run(handle_chat_completion(req, request=None, state=state, model_sampling={}))
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"]["type"] == "invalid_request_error"
+    assert state.sent is None  # nothing reached the engine
+
+
+@pytest.mark.parametrize(
+    ("temperature", "top_k", "top_p"),
+    [(0.0, -1, 1.0), (0.7, 1, 0.5), (2.0, 64, 0.99)],
+)
+def test_valid_sampling_boundaries_pass_through(temperature, top_k, top_p):
+    params = resolve_sampling(
+        temperature=temperature, top_k=top_k, top_p=top_p,
+        max_tokens=16, ignore_eos=False, model_sampling={},
+    )
+    assert params.temperature == temperature
+    assert params.top_k == top_k
+    assert params.top_p == top_p

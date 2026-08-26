@@ -13,13 +13,15 @@ import collections
 import functools
 import json
 import os
+import signal
 import sys
+
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .accounting import AccountingOutboxError, AccountingPrepareError
 from .serve_manager import Conflict
@@ -28,8 +30,8 @@ from .version import DAEMON_VERSION
 
 class StartBody(BaseModel):
     model: str
-    port: int | None = None
-    args: list[str] = []
+    port: int | None = Field(default=None, ge=1, le=65535)
+    args: list[str] = Field(default_factory=list)
 
 
 class StopBody(BaseModel):
@@ -46,7 +48,7 @@ class AccountingAckBody(BaseModel):
 
 class CheckpointBody(BaseModel):
     id: str
-    args: list[str] = []
+    args: list[str] = Field(default_factory=list)
 
 
 class CancelBody(BaseModel):
@@ -55,7 +57,7 @@ class CancelBody(BaseModel):
 
 class BenchBody(BaseModel):
     # Raw `ft bench bw` args (e.g. ["--dtype", "nvfp4", "--threshold", "2.5"]); empty = all dtypes.
-    args: list[str] = []
+    args: list[str] = Field(default_factory=list)
 
 
 def _bench_profile_path() -> str:
@@ -87,6 +89,27 @@ def _parse_ftbench(line: str) -> dict | None:
     except ValueError:
         return None
 
+
+async def _terminate_and_reap(proc: asyncio.subprocess.Process, grace_s: float = 5.0) -> None:
+    """Make sure a bench child can never outlive its request: SIGTERM the whole process
+    group, wait ``grace_s`` for exit, escalate to SIGKILL, and always reap the zombie.
+    Safe to run from async-generator cleanup (aclose / task cancellation)."""
+    if proc.returncode is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace_s)
+        return
+    except asyncio.TimeoutError:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    await proc.wait()
 
 def build_app(
     *,
@@ -325,21 +348,32 @@ def build_app(
             argv = [sys.executable, "-m", "freetoken.cli", "bench", "bw", *body.args]
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env
+                    *argv,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    # Own process group: lets us tear down the whole bench tree (it may
+                    # spawn its own children) when the client disconnects mid-stream.
+                    start_new_session=True,
                 )
             except Exception as exc:  # noqa: BLE001
                 yield _bench_sse("error", {"message": f"failed to spawn bench: {exc}"})
                 return
             tail: collections.deque = collections.deque(maxlen=8)  # last non-progress lines (errors)
             assert proc.stdout is not None
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").rstrip()
-                prog = _parse_ftbench(line)
-                if prog is not None:
-                    yield _bench_sse("progress", prog)
-                elif line:
-                    tail.append(line)
-            rc = await proc.wait()
+            try:
+                async for raw in proc.stdout:
+                    line = raw.decode(errors="replace").rstrip()
+                    prog = _parse_ftbench(line)
+                    if prog is not None:
+                        yield _bench_sse("progress", prog)
+                    elif line:
+                        tail.append(line)
+                rc = await proc.wait()
+            finally:
+                # Client disconnect / task cancellation unwinds here; never orphan the
+                # bench child: terminate, 5s grace, kill escalation, always reap.
+                await _terminate_and_reap(proc)
             if rc != 0:
                 yield _bench_sse("error", {"message": "\n".join(tail) or f"bench exited {rc}"})
                 return

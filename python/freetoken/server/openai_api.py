@@ -385,10 +385,10 @@ async def handle_completion(
     unsupported = _completion_unsupported_reason(req)
     if unsupported is not None:
         return create_error_response(unsupported)
-    try:  # surfaces an out-of-range max_tokens as a 400 rather than a 500 from the worker
+    try:  # surfaces out-of-range sampling/max_tokens as a 400 rather than a 500 from the worker
         _resolve_sampling(req, model_sampling)
     except ValueError as exc:
-        return create_error_response(str(exc), param="max_tokens")
+        return create_error_response(str(exc))
 
     prompts = [req.prompt] if isinstance(req.prompt, str) else req.prompt
     assert isinstance(prompts, list)

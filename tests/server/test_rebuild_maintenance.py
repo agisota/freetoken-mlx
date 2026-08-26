@@ -22,10 +22,11 @@ import asyncio
 import queue
 import threading
 from types import SimpleNamespace
+import pytest
 
 from fastapi.testclient import TestClient
 
-from freetoken.server.api_server import FrontendManager, dispatch_rebuild
+from freetoken.server.api_server import CacheRebuildRequest, FrontendManager, dispatch_rebuild
 from freetoken.server.supervisor import (
     BackendHandle,
     LoadProgress,
@@ -44,6 +45,8 @@ class _FakeState:
         self.maintenance_state = maintenance_state
         self.fatal_error = fatal_error
         self.last_rebuild = None
+        self.rebuild_admission_lock = asyncio.Lock()
+        self._rebuild_owner = None
         self._loop = None
         self._send_impl = send_impl
 
@@ -274,7 +277,8 @@ def test_cache_rebuild_timeout_keeps_gate_closed():
         sent.append(msg)
 
     state = SimpleNamespace(
-        maintenance_state="serving", rebuild_futures={}, last_rebuild=None, send_one=send_one
+        maintenance_state="serving", rebuild_futures={}, last_rebuild=None, send_one=send_one,
+        rebuild_admission_lock=asyncio.Lock(), _rebuild_owner=None,
     )
     api_server._GLOBAL_STATE = state
     try:
@@ -303,7 +307,8 @@ def test_cache_rebuild_send_failure_rolls_back_gate():
         raise RuntimeError("zmq down")
 
     state = SimpleNamespace(
-        maintenance_state="serving", rebuild_futures={}, last_rebuild=None, send_one=boom
+        maintenance_state="serving", rebuild_futures={}, last_rebuild=None, send_one=boom,
+        rebuild_admission_lock=asyncio.Lock(), _rebuild_owner=None,
     )
     api_server._GLOBAL_STATE = state
     try:
@@ -327,3 +332,44 @@ def test_cache_rebuild_request_rejects_unknown_mode():
     assert CacheRebuildRequest(mode="if_idle").mode == "if_idle"
     with pytest.raises(ValidationError):
         CacheRebuildRequest(mode="drain")
+
+
+def test_concurrent_rebuilds_send_one_message_and_one_busy():
+    """Two rebuilds racing the admission window: only one CacheRebuildMsg may reach the
+    scheduler; the loser gets a busy result instead of a second in-flight rebuild."""
+    sent = []
+
+    async def send_impl(msg):
+        sent.append(msg)
+
+    async def run():
+        state = _FakeState(send_impl)
+        results = await asyncio.gather(
+            dispatch_rebuild(state, moe_cache_size=8, num_pages=None, timeout=0.05),
+            dispatch_rebuild(state, moe_cache_size=16, num_pages=None, timeout=0.05),
+        )
+        statuses = sorted(r["status"] for r in results)
+        assert statuses == ["busy", "timeout"]
+        assert len(sent) == 1
+
+    asyncio.run(run())
+
+
+def test_rebuild_reply_clears_reservation():
+    """A terminal reply must release the admission reservation so a follow-up rebuild is
+    admitted (the gate alone going back to "serving" is not enough once reservations exist)."""
+    state = _FakeState(lambda msg: None, maintenance_state="rebuilding")
+    FrontendManager._resolve_rebuild(state, _reply("r1", "ok"))
+    assert state._rebuild_owner is None
+    assert state.maintenance_state == "serving"
+
+
+def test_timeout_boundaries_rejected_before_send():
+    from pydantic import ValidationError
+
+    for bad in (0, -1.0, 3600.0001, float("inf")):
+        with pytest.raises(ValidationError):
+            CacheRebuildRequest(timeout=bad)
+    # The valid inclusive upper bound and the default still construct.
+    assert CacheRebuildRequest(timeout=3600).timeout == 3600
+    assert CacheRebuildRequest().timeout == 300.0

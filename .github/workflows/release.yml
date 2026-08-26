@@ -7,19 +7,13 @@
 # matches (vX.Y.Z == __version__ X.Y.Z); scripts/build-release-wheels.sh enforces
 # this in FREETOKEN_BUILD_RELEASE mode and refuses otherwise.
 #
-# This lane is separate from nightly-wheels.yml on purpose:
-#   - nightly ships +g<sha>-stamped, linux_x86_64-tagged cp312 wheels to the
-#     FreeToken-Web rolling `beta` release, which shipped Desktops resolve by
-#     asset name -- that channel's naming must not change.
-#   - release ships bare-versioned, manylinux-retagged cp310-cp313 wheels, which
-#     is what PyPI accepts.
+# This lane is deliberately distinct from `nightly-wheels.yml`, which now runs
+# hosted validation only. Release ships bare-versioned, manylinux-retagged
+# cp310-cp313 wheels, which is what PyPI accepts.
 #
-# Security shape mirrors nightly-wheels.yml: fork code never reaches the
-# self-hosted node (no pull_request trigger + repo guard), and credentials only
-# exist on hosted runners. The upload tokens are ENVIRONMENT secrets on `pypi` /
-# `testpypi`, so the environment's reviewers gate every use of them -- NOT the
-# existing `release` environment, which holds the FreeToken-Web PAT and must
-# stay off this lane.
+# Fork code never reaches the self-hosted node (no pull_request trigger + repo
+# guard), and upload credentials exist only on hosted runners. The tokens are
+# ENVIRONMENT secrets on `pypi` / `testpypi`, so reviewers gate every use.
 #
 # One-time owner setup:
 #   - GitHub environments `pypi` and `testpypi`, `pypi` WITH required reviewers:
@@ -44,15 +38,36 @@ on:
 permissions:
   contents: read
 
-# Per-ref group, own namespace: sharing nightly-wheels' group would queue a release
-# behind a 40-minute nightly build, and a SHARED release group would let a newer tag
-# replace an earlier tag's still-PENDING run (GitHub keeps at most one pending run
-# per group). Per-ref, back-to-back tags each keep their run; the single build
-# runner serializes them anyway. No cancel-in-progress -- never kill a release mid-way.
+# Per-ref group: a shared release group could replace an earlier tag's pending
+# run. Per-ref, back-to-back tags each keep their run; the single build runner
+# serializes them anyway. No cancel-in-progress -- never kill a release mid-way.
 concurrency:
   group: release-wheels-${{ github.ref }}
 
 jobs:
+  # Hosted CPU-safe gate: tag builds proceed only when the hosted validation
+  # suite passes. Runs on the same ref as the build, before any publish job.
+  hosted-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install uv
+        run: |
+          python3 -m venv "$RUNNER_TEMP/uv"
+          "$RUNNER_TEMP/uv/bin/pip" install --disable-pip-version-check 'uv==0.12.5'
+          echo "$RUNNER_TEMP/uv/bin" >> "$GITHUB_PATH"
+      - name: Run CPU-safe test suite
+        run: |
+          PYTHONPATH=python uv run --python 3.11 --no-project \
+            --with pytest --with fastapi --with uvicorn --with pydantic --with httpx \
+            python -m pytest \
+            tests/test_docs_contract.py \
+            tests/daemon/test_daemon_import_safety.py \
+            tests/daemon/test_daemon_serve_manager.py \
+            tests/test_mlx_cache.py \
+            tests/test_mlx_cli.py -q
+
   build:
     # Guard against runs from forks of this repo; update on an org transfer.
     # Mode is keyed on the EVENT, never on ref_type: a workflow_dispatch can be
@@ -108,7 +123,7 @@ jobs:
           retention-days: 30
 
   publish-testpypi:
-    needs: build
+    needs: [build, hosted-tests]
     if: github.event_name == 'workflow_dispatch' && inputs.testpypi_rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -139,7 +154,7 @@ jobs:
         run: pipx run twine upload --verbose --skip-existing pypi-dist/*
 
   publish-pypi:
-    needs: build
+    needs: [build, hosted-tests]
     # Tag PUSH only -- a workflow_dispatch pointed at a tag ref must never reach PyPI.
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -171,7 +186,7 @@ jobs:
   # its prune-then-upload semantics and stamp-pairing gate are for the rolling beta
   # channel, and would be wrong against an immutable version tag.
   github-release:
-    needs: build
+    needs: [build, hosted-tests]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10

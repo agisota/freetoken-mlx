@@ -5,6 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("mlx.core", reason="requires the Apple-Silicon MLX runtime")
+
 import mlx.core as mx
 
 from freetoken.mlx_quantize_experts import quantize_experts

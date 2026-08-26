@@ -919,3 +919,57 @@ def test_convert_reasoning_toggle_broadcasts_every_spelling():
         assert spec.chat_template_kwargs == {
             "enable_thinking": False, "thinking_mode": "disabled"
         }, parser
+
+
+# ------------------------------------------------------- sampling validation
+import pytest
+
+
+def _sampling_cases():
+    return [
+        (-0.5, None, None),          # negative temperature
+        (float("nan"), None, None),  # non-finite temperature
+        (float("inf"), None, None),
+        (None, None, 0.0),           # top_p must be in (0, 1]
+        (None, None, 1.5),
+        (None, 0, None),             # top_k is -1 (disabled) or >= 1
+        (None, -2, None),
+    ]
+
+
+@pytest.mark.parametrize(("temperature", "top_k", "top_p"), _sampling_cases())
+def test_invalid_sampling_rejected_before_dispatch(temperature, top_k, top_p):
+    """resolve_sampling raises ValueError; /v1/responses returns the existing
+    invalid_request_error 400 without dispatching to the engine."""
+    from freetoken.server.generation import resolve_sampling
+
+    req = ResponsesRequest.model_validate({
+        "model": "gpt-x",
+        "input": "hello",
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+    })
+    with pytest.raises(ValueError):
+        RP.convert_responses_to_genspec(req, {})
+
+    state = SimpleNamespace(config=SimpleNamespace(reasoning_parser=None, max_output_tokens=None))
+    response = asyncio.run(RP.handle_responses(req, request=None, state=state, model_sampling={}))
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize(
+    ("temperature", "top_k", "top_p"),
+    [(0.0, -1, 1.0), (0.7, 1, 0.5), (2.0, 64, 0.99)],
+)
+def test_valid_sampling_boundaries_pass_through(temperature, top_k, top_p):
+    from freetoken.server.generation import resolve_sampling
+    params = resolve_sampling(
+        temperature=temperature, top_k=top_k, top_p=top_p,
+        max_tokens=16, ignore_eos=False, model_sampling={},
+    )
+    assert params.temperature == temperature
+    assert params.top_k == top_k
+    assert params.top_p == top_p

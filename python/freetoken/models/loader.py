@@ -148,6 +148,15 @@ CT_SCALE_SUFFIXES = (
 )
 
 
+def _shard_path(folder: str, rel: str) -> str:
+    """Resolve a weight_map shard filename, refusing entries that escape the folder."""
+    root = os.path.realpath(folder)
+    resolved = os.path.realpath(os.path.join(folder, rel))
+    if not (resolved == root or resolved.startswith(root + os.sep)):
+        raise ValueError(f"weight_map shard escapes model folder: {rel!r}")
+    return os.path.join(folder, rel)
+
+
 class ShardReader:
     """Serves tensors by name across safetensors shards (handles opened lazily).
 
@@ -163,7 +172,8 @@ class ShardReader:
             with open(index, encoding="utf-8") as f:
                 weight_map = json.load(f)["weight_map"]
             self._map = {
-                name: os.path.join(folder, shard) for name, shard in weight_map.items()
+                name: _shard_path(folder, shard)
+                for name, shard in weight_map.items()
             }
         else:  # single-file checkpoint
             import safetensors

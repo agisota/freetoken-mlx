@@ -33,7 +33,7 @@ from freetoken.utils import (
     init_logger,
     load_generation_sampling,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .args import ServerArgs
 from .anthropic_api import register_anthropic_routes
@@ -194,6 +194,14 @@ class FrontendManager:
     _frontend_tokenizer_lock: Any = field(default_factory=threading.Lock)
     # One-shot guard for warm_frontend_tokenizer(); benign if two polls race it.
     _frontend_warm_started: bool = False
+    # Serializes cache-rebuild ADMISSION: the maintenance_state check + reservation
+    # happen atomically under this lock, so two concurrent POST /v1/cache/rebuild calls
+    # can never both dispatch a CacheRebuildMsg. The lock is NOT held across the wait.
+    rebuild_admission_lock: Any = field(default_factory=asyncio.Lock)
+    # request_id currently holding the rebuild reservation (or None). dispatch_rebuild
+    # sets it under the lock; only its owner may roll it back, and _resolve_rebuild /
+    # fail_pending_rebuilds release it when the terminal reply arrives.
+    _rebuild_owner: str | None = None
 
     def __post_init__(self) -> None:
         if self.stats is None:
@@ -280,11 +288,10 @@ class FrontendManager:
         fut = self.rebuild_futures.pop(msg.request_id, None)
         if fut is not None and not fut.done():
             fut.set_result(self.last_rebuild)
-        if self.fatal_error is not None:
-            # A dead backend stays failed regardless of any (possibly stale/buffered) reply.
-            self.maintenance_state = "failed"
-            return
-        self.maintenance_state = "failed" if msg.status == "failed" else "serving"
+        if self._rebuild_owner == msg.request_id:
+            self._rebuild_owner = None
+        if self.maintenance_state != "failed":
+            self.maintenance_state = "failed" if msg.status == "failed" else "serving"
 
     def fail_pending_rebuilds(self, message: str) -> None:
         """Resolve every in-flight rebuild waiter as failed. Called from the supervisor thread
@@ -301,6 +308,8 @@ class FrontendManager:
         def _resolve_all() -> None:
             for request_id in list(self.rebuild_futures):
                 fut = self.rebuild_futures.pop(request_id, None)
+                if self._rebuild_owner == request_id:
+                    self._rebuild_owner = None
                 if fut is not None and not fut.done():
                     fut.set_result(dict(result))
 
@@ -362,15 +371,25 @@ class FrontendManager:
                     raise asyncio.CancelledError
                 yield chunk
         except asyncio.CancelledError:
-            asyncio.create_task(self.abort_user(uid))
+            # Await the abort INLINE (shielded) instead of fire-and-forget: the backend
+            # must learn about the disconnect before we surface the cancellation, and no
+            # unowned task may outlive this call. shield keeps a second cancel from killing
+            # the delivery mid-flight; whatever happens, CancelledError still propagates.
+            try:
+                await asyncio.shield(self.abort_user(uid))
+            except Exception:  # noqa: BLE001 -- delivery must never mask the cancellation
+                logger.exception("Failed to deliver abort for user %s", uid)
             raise
 
     async def abort_user(self, uid: int):
-        await asyncio.sleep(0.1)
-        if uid in self.ack_map:
-            del self.ack_map[uid]
-        if uid in self.event_map:
-            del self.event_map[uid]
+        """Idempotently tear down uid and tell the scheduler to stop generating for it.
+        The map pop is the claim marker: only the caller that actually removes the uid's
+        ack/event entries sends AbortMsg (and charges stats), so a retry or a racing
+        accounting drain can never produce a duplicate abort."""
+        claimed = self.event_map.pop(uid, None) is not None
+        self.ack_map.pop(uid, None)
+        if not claimed:
+            return
         self.stats.on_abort(uid)
         logger.warning("Aborting request for user %s", uid)
         await self.send_one(AbortMsg(uid=uid))
@@ -492,7 +511,7 @@ class CacheRebuildRequest(BaseModel):
     # is deferred (needs the drain-gate machinery); constraining the Literal makes an
     # unsupported value fail fast with a 422 at the API layer instead of a generic 503.
     mode: Literal["if_idle"] = "if_idle"
-    timeout: float = 300.0
+    timeout: float = Field(default=300.0, gt=0.0, le=3600.0)
 
 
 async def dispatch_rebuild(
@@ -503,7 +522,9 @@ async def dispatch_rebuild(
     num_mamba_slots: int | None = None,
     num_swa_pages: int | None = None,
     mode: str = "if_idle",
-    timeout: float = 300.0,
+    # Finite wait only: (0, 3600] seconds. 0/negative/NaN/inf would make wait_for either
+    # return immediately or hang forever, and an unbounded HTTP request is a resource leak.
+    timeout: float = Field(default=300.0, gt=0.0, le=3600.0),
 ) -> Dict[str, Any]:
     """Send a cache-rebuild request to the scheduler and await its result, managing the
     maintenance gate. Returns the scheduler's result dict, or a synthesized
@@ -512,8 +533,15 @@ async def dispatch_rebuild(
     ``/cache``), which does the pre-flight maintenance_state checks (409/503 short-circuits)."""
     request_id = str(uuid.uuid4())
     fut = asyncio.get_running_loop().create_future()
+    # ADMISSION is serialized: check-and-reserve atomically under the manager lock, so two
+    # concurrent rebuilds can never both dispatch. The lock is released before the (long)
+    # wait — it guards admission, not execution.
+    async with state.rebuild_admission_lock:
+        if state._rebuild_owner is not None:
+            return {"status": "busy", "request_id": None}
+        state._rebuild_owner = request_id
+        state.maintenance_state = "rebuilding"
     state.rebuild_futures[request_id] = fut
-    state.maintenance_state = "rebuilding"
     try:
         await state.send_one(
             CacheRebuildMsg(
@@ -527,23 +555,25 @@ async def dispatch_rebuild(
         )
     except Exception as e:  # noqa: BLE001
         # The enqueue failed, so the scheduler never received the request and the engine is
-        # untouched. Roll the gate back to serving (else a transient ZMQ error would latch
-        # maintenance forever with no reply ever arriving to clear it) and surface the error.
+        # untouched. Roll back ONLY this call's reservation under the lock (else a transient
+        # ZMQ error would latch maintenance forever with no reply ever arriving to clear it)
+        # and surface the error.
         state.rebuild_futures.pop(request_id, None)
-        state.maintenance_state = "serving"
+        async with state.rebuild_admission_lock:
+            if state._rebuild_owner == request_id:
+                state._rebuild_owner = None
+                state.maintenance_state = "serving"
         return {"status": "failed", "error": f"failed to dispatch rebuild: {e!r}"}
     try:
         return await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
-        # Do NOT reopen the maintenance gate here: the scheduler may still be mid-rebuild
-        # (e.g. a slow CUDA-graph recapture) and the backend request was not cancelled.
-        # Leave maintenance_state == "rebuilding" so new generation and new rebuilds stay
-        # blocked; the eventual CacheRebuildReply flips it to serving/failed via
-        # _resolve_rebuild. Drop the now-cancelled future so it does not linger.
+        # Do NOT reopen the maintenance gate or release the reservation here: the scheduler
+        # may still be mid-rebuild (e.g. a slow CUDA-graph recapture) and the backend request
+        # was not cancelled. Leave maintenance_state == "rebuilding" and _rebuild_owner set so
+        # new generation and new rebuilds stay blocked; the eventual CacheRebuildReply flips
+        # both via _resolve_rebuild. Drop the now-cancelled future so it does not linger.
         state.rebuild_futures.pop(request_id, None)
         return {"status": "timeout", "request_id": request_id}
-
-
 def _resolve_num_swa_pages(state: FrontendManager, req: CacheRebuildRequest) -> int | None:
     """External accepts num_swa_pages OR swa_full_tokens_ratio; internally only num_swa_pages
     flows. Convert a ratio to an absolute window at the requested (or current) full anchor, in the
@@ -610,8 +640,9 @@ async def cache_rebuild(req: CacheRebuildRequest):
     )
     if result["status"] == "timeout":
         return JSONResponse(result, status_code=504)
+    if result["status"] == "busy":
+        return JSONResponse(result, status_code=409)
     return JSONResponse(result, status_code=200 if result["status"] == "ok" else 503)
-
 
 def _cache_limits(geo: dict, unit_bytes: dict, pool_budget: int, floors: dict) -> dict:
     """Per-pool adjustable {min, max} bounds for the desktop cache sliders, so their ranges stay

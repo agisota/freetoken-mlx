@@ -1,31 +1,17 @@
-# benchmarks
+# Бенчмарки
 
-Запуск из корня репозитория с `PYTHONPATH=python:.`, привязка к одному GPU
-(`CUDA_VISIBLE_DEVICES=0`). Подробности — в `--help` / docstring каждого скрипта.
+Запускайте из корня репозитория. Бенчмарки относятся к Linux/CUDA, если script не говорит обратного; закрепите GPU через `CUDA_VISIBLE_DEVICES=0` и сохраните model revision, backend, prompt, token count и raw JSON.
 
-**`bench_decode_moe.py`** — tok/s декода при bs=1 для обслуживаемой MoE-модели. Запускает `ft serve`
-для каждого бэкенда и замеряет приход токенов по стриминговому `/v1/chat/completions`, так что
-в числа входит весь путь обслуживания. Промпт AIME-25, сэмплирование по рекомендациям чекпоинта.
+| Script | Назначение | Команда |
+| --- | --- | --- |
+| `bench_decode_moe.py` | End-to-end streaming decode throughput для выбранных MoE backends. | `python benchmarks/bench_decode_moe.py --model /path/to/model --backend offload,cpu,hybrid` |
+| `bench_load_weight_generic.py` | Загрузка expert bank для sequential, O_DIRECT и FTW layouts. Только Linux; FTW по умолчанию в `/var/tmp`. | `python benchmarks/bench_load_weight_generic.py --model /path/to/model` |
+| `bench_offload_cache_copy.py` | Synthetic cost копирования cache без checkpoint. | `python benchmarks/bench_offload_cache_copy.py` |
 
-```bash
-python benchmarks/bench_decode_moe.py --model /path/to/model --backend offload,cpu,hybrid
-```
-
-**`bench_load_weight_generic.py`** — время загрузки банка экспертов: последовательная загрузка vs параллельный O_DIRECT
-vs предупакованный FTW, каждый режим в своём subprocess. Только Linux; FTW размещается в
-`/var/tmp` (`--ftw-dir` переопределяет; примерно размером с чекпоинт).
+Для host-RAM versus PCIe bandwidth и выбора backend используйте:
 
 ```bash
-python benchmarks/bench_load_weight_generic.py --model /path/to/model
+ft bench bw --help
 ```
 
-**`bench_offload_cache_copy.py`** — синтетический бенчмарк (без чекпоинта): стоимость копирования экспертов
-за слой при декоде (`ensure_experts` + `copy_missing`), перебор по раскладке банка x слотам кэша x
-размеру батча x доле промахов.
-
-```bash
-python benchmarks/bench_offload_cache_copy.py
-```
-
-Для пропускной способности RAM хоста vs PCIe и выбора бэкенда offload/hybrid используйте вместо этого
-`ft bench bw` — он записывает JSON-профиль, который читает движок.
+Бенчмарк пишет JSON profile, который читает engine. Сравнивайте fresh processes с fixed inputs и median, а не один самый быстрый run.
